@@ -16,13 +16,29 @@ using namespace std;
 #ifndef COMMON_H
 #define COMMON_H
 
+/* Number of messages in the shuffle. Overridable: the proof holds all of them
+ * in memory. It lives here rather than in src/ntru_shuffle.cpp because the
+ * norm proof's short instance is amortized over exactly these commitments and
+ * is compiled on its own. */
+#ifndef MSGS
+#define MSGS        1000
+#endif
+/* Security level to attain. */
+#define LEVEL       128
+/* The \infty-norm bound of certain elements: the commitment randomness is
+ * ternary, which is the B_Com = 1 of Table 2. */
+#define BETA        1
 /* Width k of the commitment matrix. */
 #define WIDTH        4
 /* Height of the commitment matrix. */
 #define HEIGHT        1
-/* Dimension of the committed messages. */
+/* Dimension of the committed messages: how many ring elements a commitment
+ * key can carry. The shuffle commits one at a time, but the membership proof
+ * of pismall.h commits to the R = HEIGHT + 1 rows of a commitment equation
+ * under the same key, so the key needs two rows and the scheme uses the first.
+ * Hiding needs WIDTH > HEIGHT + SIZE, which at 4 > 3 still holds. */
 #ifndef SIZE
-#define SIZE        1
+#define SIZE        2
 #endif
 /* Degree of the irreducible polynomial. */
 #define DEGREE      2048//4096

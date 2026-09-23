@@ -69,13 +69,24 @@ jobs:
                FLINT="-L$FLINT_PREFIX/lib -lflint" ntru_pismall
           ./ntru_pismall
 
+      - name: Test ntru_pibnd
+        run: |
+          make clean
+          make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DTAU=8 -DNTI=8" \
+               FLINT="-L$FLINT_PREFIX/lib -lflint" ntru_pibnd
+          ./ntru_pibnd
+
       # Both parities, since the prover indexes MSGS - 2 and pairs the messages
-      # up: an even-only run leaves the last term of an odd list untested.
+      # up: an even-only run leaves the last term of an odd list untested. The
+      # shuffle links both sub-proofs of Lemma 5, so this covers the membership
+      # instance of ntru_pismall and the short instance of ntru_pibnd as well;
+      # NTI is shrunk because the runner has neither the memory nor the time
+      # for the 130 columns the soundness of the norm proof needs.
       - name: Test ntru_shuffle
         run: |
           for n in 4 5; do
             make clean
-            make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DMSGS=$n" \
+            make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DMSGS=$n -DNTI=8" \
                  FLINT="-L$FLINT_PREFIX/lib -lflint" ntru_shuffle
             ./ntru_shuffle
           done
@@ -127,11 +138,12 @@ jobs:
       # off because NFLlib and FLINT both keep static caches alive at exit.
       - name: Build and run under sanitizers
         run: |
-          make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DTAU=8 -DMSGS=4" \
+          make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DTAU=8 -DNTI=8 -DMSGS=4" \
                FLINT="-L$FLINT_PREFIX/lib -lflint" \
                OPT="-O1 -march=native -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
-               ntru_bdlop ntru ntru_pismall ntru_shuffle
+               ntru_bdlop ntru ntru_pibnd ntru_pismall ntru_shuffle
           ./ntru_bdlop
           ./ntru
+          ./ntru_pibnd
           ./ntru_pismall
           ./ntru_shuffle

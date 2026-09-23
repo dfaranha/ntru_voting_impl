@@ -79,6 +79,12 @@
 void test_fail(void);
 
 /**
+ * How many tests have failed so far, so that main() can exit non-zero and CI
+ * can tell a failing run from a passing one.
+ */
+int test_failures(void);
+
+/**
  * Prints a string indicating that the test passed.
  */
 void test_pass(void);

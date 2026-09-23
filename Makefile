@@ -26,7 +26,7 @@ LIBS     = deps/libnfllib_static.a -lgmp -lmpfr -lquadmath
 FLINT    = -lflint
 
 OBJ      = obj
-BIN      = ntru ntru_bdlop ntru_pismall ntru_shuffle
+BIN      = ntru ntru_bdlop ntru_pibnd ntru_pismall ntru_shuffle
 
 # The first rule below is the config stamp, and its target contains a slash, so
 # make would take it as the default goal and a bare `make` would build nothing.
@@ -71,15 +71,6 @@ $(OBJ)/%.o: src/%.cpp $(STAMP) | $(OBJ)
 $(BLAKE3): $(BLAKE3_SRC) | $(OBJ)
 	$(CPP) $(CFLAGS) -r -nostdlib $(BLAKE3_SRC) -o $@
 
-# ntru_pismall proves a relation over SIZE = 3 committed messages, while
-# ntru_shuffle commits to one at a time at the default SIZE = 1. That is the
-# only difference between the two, so both come from src/ntru_bdlop.cpp, built twice.
-# The two builds must not share an object file, or whichever target is built
-# last silently links the wrong one -- which is what the previous Makefile did,
-# compiling a separate scalar-message copy of it into the same object.
-$(OBJ)/bdlop-size3.o: src/ntru_bdlop.cpp $(STAMP) | $(OBJ)
-	$(CPP) $(CFLAGS) -DSIZE=3 -c $< -o $@
-
 # The commitment scheme's own tests and benchmarks. Built at SIZE = 2 because
 # its second test commits to two messages and folds one into the other, which
 # is what a single-message build cannot exercise; the library objects above are
@@ -87,19 +78,39 @@ $(OBJ)/bdlop-size3.o: src/ntru_bdlop.cpp $(STAMP) | $(OBJ)
 ntru_bdlop: src/ntru_bdlop.cpp $(COMMON) $(STAMP)
 	$(CPP) $(CFLAGS) -DSIZE=2 -DMAIN src/ntru_bdlop.cpp $(COMMON) -o $@ $(LIBS)
 
+# The amortized norm proof, and the instance the proof of shuffle links: the
+# openings of its MSGS commitments to the sigma_i. The Makefile selects that
+# one with -DPIBND_SHORT and src/pibnd.cpp derives what follows from it.
+$(OBJ)/pibnd-short.o: src/pibnd.cpp $(STAMP) | $(OBJ)
+	$(CPP) $(CFLAGS) -DPIBND_SHORT -c $< -o $@
+
+ntru_pibnd: src/pibnd.cpp $(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o \
+		$(COMMON) $(BLAKE3) $(STAMP)
+	$(CPP) $(CFLAGS) -DMAIN src/pibnd.cpp $(OBJ)/sample_z_small.o \
+		$(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) -o $@ $(LIBS)
+
 ntru: src/ntru.cpp $(OBJ)/sample_z_small.o $(COMMON) $(BLAKE3) $(STAMP)
 	$(CPP) $(CFLAGS) -DMAIN src/ntru.cpp $(OBJ)/sample_z_small.o \
 		$(COMMON) $(BLAKE3) -o $@ $(LIBS)
 
-ntru_pismall: src/ntru_pismall.cpp $(OBJ)/bdlop-size3.o $(COMMON) $(BLAKE3) \
-		$(STAMP)
-	$(CPP) $(CFLAGS) -DSIZE=3 -DMAIN src/ntru_pismall.cpp \
-		$(OBJ)/bdlop-size3.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
+# pismall as a library, for the proof that each committed sigma_i is a ring
+# constant. It is amortized over exactly the MSGS commitments the shuffle has,
+# rounded up to the power of two its interpolation nodes need, and takes the
+# shape of a commitment equation rather than the mix-net's own.
+$(OBJ)/pismall-const.o: src/ntru_pismall.cpp $(STAMP) | $(OBJ)
+	$(CPP) $(CFLAGS) -UTAU -DTAU='AEX_PAD2(MSGS)' -c $< -o $@
 
-ntru_shuffle: src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o \
-		$(OBJ)/sample_z_small.o $(COMMON) $(BLAKE3) $(STAMP)
+ntru_pismall: src/ntru_pismall.cpp $(OBJ)/ntru_bdlop.o $(COMMON) $(BLAKE3) \
+		$(STAMP)
+	$(CPP) $(CFLAGS) -DMAIN src/ntru_pismall.cpp \
+		$(OBJ)/ntru_bdlop.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
+
+ntru_shuffle: src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o \
+		$(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o \
+		$(COMMON) $(BLAKE3) $(STAMP)
 	$(CPP) $(CFLAGS) -DMAIN src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o \
-		$(OBJ)/sample_z_small.o $(COMMON) $(BLAKE3) -o $@ $(LIBS)
+		$(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
+		$(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
 
 clean:
 	rm -rf $(OBJ) $(BIN) *.d
