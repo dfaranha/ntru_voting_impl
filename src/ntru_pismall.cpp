@@ -406,15 +406,12 @@ static void pismall_free(void) {
 
 /* --- Reed-Solomon encoding over Z_q ------------------------------------- */
 
-static fmpz *aex_scratch;                              /* symbol buffer */
 static_assert(2 * params::poly_q::degree + ETA <= AEX_COLS,
 		"the Reed-Solomon message does not fit in the code");
-static std::array < mpz_t, params::poly_big::degree > aex_mpz;
+/* The code is over the one modulus of poly_big, which is q: a symbol is one
+ * residue, set and read in place rather than through GMP. */
+static_assert(params::poly_big::nmoduli == 1, "a symbol is one residue");
 static params::poly_big *aex_poly;                     /* NTT working poly */
-
-static inline void aex_pack(aex_code_t * c, size_t i, const fmpz_t x) {
-	fmpz_get_ui_array(c->w + 2 * i, 2, x);
-}
 
 static inline void aex_unpack(fmpz_t x, const aex_code_t * c, size_t i) {
 	fmpz_set_ui_array(x, c->w + 2 * i, 2);
@@ -422,19 +419,25 @@ static inline void aex_unpack(fmpz_t x, const aex_code_t * c, size_t i) {
 
 
 static void aex_ntt_setup(const fmpz_mod_ctx_t ctx) {
-	aex_scratch = _fmpz_vec_init(AEX_COLS);
-	aex_poly = new params::poly_big;
-	for (size_t i = 0; i < params::poly_big::degree; i++) {
-		mpz_init2(aex_mpz[i], params::poly_big::bits_in_moduli_product() << 2);
+	/* The symbols are taken mod q by the context and mod poly_big's modulus
+	 * by the transform; they have to be the same prime. */
+	if (fmpz_cmp_ui(fmpz_mod_ctx_modulus(ctx), params::poly_big::get_modulus(0)) != 0) {
+		fprintf(stderr, "aex: the code's modulus is not q\n");
+		abort();
 	}
+	aex_poly = new params::poly_big;
 }
 
 static void aex_ntt_clear(void) {
-	_fmpz_vec_clear(aex_scratch, AEX_COLS);
 	delete aex_poly;
-	for (size_t i = 0; i < params::poly_big::degree; i++) {
-		mpz_clear(aex_mpz[i]);
-	}
+}
+
+/* A symbol, reduced mod poly_big's modulus as mpz2poly did. Every caller's
+ * symbols are already below it, so the division is the rare branch. */
+static inline uint64_t aex_sym(const fmpz_t x) {
+	const uint64_t p = params::poly_big::get_modulus(0), v = fmpz_get_ui(x);
+
+	return (v < p) ? v : v % p;
 }
 
 /* Encode(in0, in1, r): pack the two message blocks and the randomness into the
@@ -442,31 +445,32 @@ static void aex_ntt_clear(void) {
 static void aex_encode(aex_code_t & out, fmpz_mod_poly_t in0,
 		fmpz_mod_poly_t in1, const fmpz * in, const fmpz_mod_ctx_t ctx) {
 	const size_t N = params::poly_q::degree;
+	const slong l0 = fmpz_mod_poly_length(in0, ctx), l1 = fmpz_mod_poly_length(in1, ctx);
+	params::poly_big & a = *aex_poly;
 	size_t i;
 
+	/* The coefficients are below q, so each is one word; past a polynomial's
+	 * length they are zero. */
 	for (i = 0; i < N; i++) {
-		fmpz_mod_poly_get_coeff_fmpz(aex_scratch + i, in0, i, ctx);
-		fmpz_get_mpz(aex_mpz[i], aex_scratch + i);
+		a(0, i) = ((slong) i < l0) ? aex_sym(in0->coeffs + i) : 0;
 	}
 	for (; i < 2 * N; i++) {
-		fmpz_mod_poly_get_coeff_fmpz(aex_scratch + i, in1, i - N, ctx);
-		fmpz_get_mpz(aex_mpz[i], aex_scratch + i);
+		a(0, i) = ((slong) (i - N) < l1) ? aex_sym(in1->coeffs + (i - N)) : 0;
 	}
 	for (; i < 2 * N + ETA; i++) {
-		fmpz_get_mpz(aex_mpz[i], in + (i - 2 * N));
+		a(0, i) = aex_sym(in + (i - 2 * N));
 	}
 	for (; i < AEX_COLS; i++) {
-		mpz_set_ui(aex_mpz[i], 0);
+		a(0, i) = 0;
 	}
 
-	/* Both NFLlib moduli satisfy p = 1 mod 2 * AEX_COLS, so this is a genuine
-	 * length-AEX_COLS transform; poly2mpz then CRTs each symbol back. */
-	aex_poly->mpz2poly(aex_mpz);
-	aex_poly->ntt_pow_phi();
-	aex_poly->poly2mpz(aex_mpz);
+	/* q = 1 mod 2 * AEX_COLS, so this is a genuine length-AEX_COLS transform
+	 * over Z_q, and its outputs are the symbols. aex_pack's two limbs hold a
+	 * symbol and a zero. */
+	a.ntt_pow_phi();
 	for (i = 0; i < AEX_COLS; i++) {
-		fmpz_set_mpz(aex_scratch + i, aex_mpz[i]);
-		aex_pack(&out, i, aex_scratch + i);
+		out.w[2 * i] = a(0, i);
+		out.w[2 * i + 1] = 0;
 	}
 }
 
@@ -1337,24 +1341,51 @@ static void pismall_hash(gr_t & x, gr_t & beta0, gr_t beta[TAU][3], fmpz_t q,
 	flint_rand_clear(rand);
 }
 
+/* out = in * x mod q, as fmpz_mod_poly_scalar_mul_fmpz, for a modulus below
+ * 2^63 (q here). Every coefficient is multiplied by the same x, so Shoup's
+ * precomputed quotient floor(x 2^64 / q) turns each product into two
+ * multiplications and a conditional subtraction, where FLINT reduces each
+ * product of two fmpz. The coefficients are small fmpz, read and written
+ * inline. out may be in. */
+static void scalar_mul(fmpz_mod_poly_t out, const fmpz_mod_poly_t in,
+		const fmpz_t x, const fmpz_mod_ctx_t ctx) {
+	const uint64_t q = fmpz_get_ui(fmpz_mod_ctx_modulus(ctx));
+	const slong len = fmpz_mod_poly_length(in, ctx);
+	uint64_t s, sp;
+
+	if (fmpz_bits(fmpz_mod_ctx_modulus(ctx)) > 63 || fmpz_sgn(x) < 0 || fmpz_cmp_ui(x, q) >= 0) {
+		fmpz_mod_poly_scalar_mul_fmpz(out, in, x, ctx);
+		return;
+	}
+	s = fmpz_get_ui(x);
+	sp = (uint64_t) (((__uint128_t) s << 64) / q);
+	fmpz_mod_poly_fit_length(out, len, ctx);
+	for (slong i = 0; i < len; i++) {
+		const uint64_t v = fmpz_get_ui(in->coeffs + i);
+		const uint64_t h = (uint64_t) (((__uint128_t) sp * v) >> 64);
+		uint64_t r = s * v - h * q;
+
+		r -= (r >= q) ? q : 0;
+		fmpz_set_ui(out->coeffs + i, r);
+	}
+	_fmpz_mod_poly_set_length(out, len);
+	_fmpz_mod_poly_normalise(out);
+}
+
 static void poly_to(params::poly_q & out, fmpz_mod_poly_t & in,
 		const fmpz_mod_ctx_t ctx) {
-	array < mpz_t, params::poly_q::degree > coeffs;
+	/* in's coefficients are reduced mod q, the one modulus of poly_q, so each
+	 * is the residue itself; past in's length they are zero. */
+	static_assert(params::poly_q::nmoduli == 1, "a coefficient is one residue");
+	const slong len = fmpz_mod_poly_length(in, ctx);
+	const uint64_t q = params::poly_q::get_modulus(0);
 
 	for (size_t i = 0; i < params::poly_q::degree; i++) {
-		mpz_init2(coeffs[i], (params::poly_q::bits_in_moduli_product() << 2));
-	}
+		const uint64_t v = ((slong) i < len) ? fmpz_get_ui(in->coeffs + i) : 0;
 
-	for (size_t i = 0; i < params::poly_q::degree; i++) {
-		flint_poly_get_coeff_mpz(coeffs[i], in, i, ctx);
+		out(0, i) = (v < q) ? v : v % q;
 	}
-
-	out.mpz2poly(coeffs);
 	out.ntt_pow_phi();
-
-	for (size_t i = 0; i < params::poly_q::degree; i++) {
-		mpz_clear(coeffs[i]);
-	}
 }
 
 static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
@@ -1435,7 +1466,7 @@ static void pismall_setup(fmpz_mod_poly_t lag[], fmpz_t a[TAU], fmpz_t & q,
 			}
 		}
 		fmpz_invmod(u, u, q);
-		fmpz_mod_poly_scalar_mul_fmpz(lag[i], lag[i], u, ctx);
+		scalar_mul(lag[i], lag[i], u, ctx);
 	}
 
 	fmpz_clear(t);
@@ -1680,7 +1711,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	for (int i = 0; i < V; i++) {
 		poly_from(poly, s0[i], ctx_q);
 		for (int c = 0; c < AEX_DEG; c++) {
-			fmpz_mod_poly_scalar_mul_fmpz(f[i][c], poly,
+			scalar_mul(f[i][c], poly,
 					prover_y[0].c[c], ctx_q);
 		}
 	}
@@ -1689,7 +1720,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 		for (int j = 0; j < V; j++) {
 			poly_from(poly, s[i - 1][j], ctx_q);
 			for (int c = 0; c < AEX_DEG; c++) {
-				fmpz_mod_poly_scalar_mul_fmpz(poly2, poly,
+				scalar_mul(poly2, poly,
 						prover_y[i].c[c], ctx_q);
 				fmpz_mod_poly_add(f[j][c], f[j][c], poly2, ctx_q);
 			}
@@ -1718,7 +1749,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	for (size_t k = 0; k < V; k++) {
 		poly_from(poly, s0[k], ctx);
 		for (int c = 0; c < AEX_DEG; c++) {
-			fmpz_mod_poly_scalar_mul_fmpz(poly2, poly,
+			scalar_mul(poly2, poly,
 					beta0.c[c], ctx);
 			fmpz_mod_poly_add(h[0][k][c], h[0][k][c], poly2, ctx);
 		}
@@ -1731,7 +1762,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 					 * the end of the matrix on the last iteration. */
 					poly_from(poly, s[i - 1][k], ctx_q);
 					for (int c = 0; c < AEX_DEG; c++) {
-						fmpz_mod_poly_scalar_mul_fmpz(poly2, poly,
+						scalar_mul(poly2, poly,
 								b.c[c], ctx_q);
 						fmpz_mod_poly_add(h[0][k][c], h[0][k][c], poly2, ctx);
 					}
@@ -1741,7 +1772,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 							ctx_q);
 				}
 				for (int c = 0; c < AEX_DEG; c++) {
-					fmpz_mod_poly_scalar_mul_fmpz(poly2, poly,
+					scalar_mul(poly2, poly,
 							b.c[c], ctx_q);
 					fmpz_mod_poly_add(h[1][k][c], h[1][k][c], poly2, ctx);
 				}
@@ -1851,7 +1882,7 @@ static int pismall_verifier(commit_t & com, fmpz_mod_poly_t f[V][AEX_DEG],
 			for (int j = 0; j < R; j++) {
 				poly_from(poly, t[i - 1][j], ctx_q);
 				for (int c = 0; c < AEX_DEG; c++) {
-					fmpz_mod_poly_scalar_mul_fmpz(poly2, poly,
+					scalar_mul(poly2, poly,
 							vlev[i].c[c], ctx_q);
 					fmpz_mod_poly_add(r[j][c], r[j][c], poly2, ctx_q);
 				}
@@ -1892,7 +1923,7 @@ static int pismall_verifier(commit_t & com, fmpz_mod_poly_t f[V][AEX_DEG],
 					} else {
 						fmpz_set(nrb, l0i.c[b]);
 					}
-					fmpz_mod_poly_scalar_mul_fmpz(w, r[i][a], nrb, ctx_q);
+					scalar_mul(w, r[i][a], nrb, ctx_q);
 					fmpz_mod_poly_add(u[aex_basis_idx[a][b]],
 							u[aex_basis_idx[a][b]], w, ctx_q);
 				}
@@ -2265,7 +2296,7 @@ static void test(flint_rand_t rand) {
 			for (int j = 0; j < V; j++) {
 				poly_from(f[j][0], A[i][j], ctx);
 				poly_to(rd[0], f[j][0], ctx);
-				TEST_ASSERT(rd[0] == A[i][j], end);
+				TEST_ASSERT(util::equal(rd[0], A[i][j]), end);
 			}
 		}
 		fmpz_mod_poly_zero(poly, ctx_q);
@@ -2278,9 +2309,40 @@ static void test(flint_rand_t rand) {
 				poly_from(f[j][0], A[i][j], ctx_q);
 				fmpz_mod_poly_mulmod(f[j][0], f[j][0], f[j][0], poly, ctx_q);
 				poly_to(rd[1], f[j][0], ctx_q);
-				TEST_ASSERT(rd[0] == rd[1], end);
+				TEST_ASSERT(util::equal(rd[0], rd[1]), end);
 			}
 		}
+	} TEST_END;
+
+	TEST_BEGIN("scalar multiplication agrees with FLINT's") {
+		fmpz_mod_poly_t u, w;
+		fmpz_t x;
+		int ok = 1;
+
+		fmpz_mod_poly_init(u, ctx_q);
+		fmpz_mod_poly_init(w, ctx_q);
+		fmpz_init(x);
+		for (int k = 0; k < 6 && ok; k++) {
+			fmpz_mod_poly_randtest(poly, rand, params::poly_q::degree, ctx_q);
+			/* Random, then 0, 1 and q - 1, then a scalar past q, which takes
+			 * the fallback. */
+			if (k == 0) fmpz_randm(x, rand, q);
+			if (k == 1) fmpz_zero(x);
+			if (k == 2) fmpz_one(x);
+			if (k == 3) fmpz_sub_ui(x, q, 1);
+			if (k == 4) fmpz_add_ui(x, q, 5);
+			if (k == 5) fmpz_randm(x, rand, q);
+			fmpz_mod_poly_scalar_mul_fmpz(u, poly, x, ctx_q);
+			scalar_mul(w, poly, x, ctx_q);
+			ok &= fmpz_mod_poly_equal(u, w, ctx_q);
+			/* In place. */
+			scalar_mul(poly, poly, x, ctx_q);
+			ok &= fmpz_mod_poly_equal(u, poly, ctx_q);
+		}
+		fmpz_clear(x);
+		fmpz_mod_poly_clear(u, ctx_q);
+		fmpz_mod_poly_clear(w, ctx_q);
+		TEST_ASSERT(ok, end);
 	} TEST_END;
 
 	pismall_setup(lag, a, q, rand, ctx);
