@@ -359,7 +359,9 @@ static void aex_sample_set(params::poly_q & out, aex_set_t set) {
  * CONFIG=-DTAU=8 to make to try it on a smaller machine. */
 static params::poly_q A[R][V];
 static params::poly_q (*s)[V], (*t)[R];
-static array < mpz_t, params::poly_q::degree > (*v)[TAU][V];
+/* The witness's components, one residue mod q a coefficient. */
+static_assert(params::poly_q::nmoduli == 1, "a coefficient of v is one residue");
+static uint64_t (*v)[TAU][V][params::poly_q::degree];
 static gr_t *prover_y;                      /* prover_y[i] = l_i(x) */
 static gr_t (*prover_beta)[3];
 static gr_t (*prover_wt)[3];                /* l_i(x) l_0(x)^j */
@@ -373,10 +375,12 @@ static fmpz_t (*prover_r)[3][ETA];
  * 4096; here N is 2048 and the two must not drift apart. */
 #define AEX_COLS    ((size_t) params::poly_big::degree)
 
-/* One codeword: AEX_COLS elements of Z_q packed as two 64-bit limbs each, so a
- * codeword occupies exactly as much as the params::poly_big it replaces. */
+/* One codeword: AEX_COLS elements of Z_q, one 64-bit word each. They were two
+ * limbs each, sized for a CRT over two moduli; with q the one modulus the high
+ * limb was always zero, and it doubled the codewords in memory and the opened
+ * columns in the proof. */
 typedef struct {
-	uint64_t w[2 * AEX_COLS];
+	uint64_t w[AEX_COLS];
 } aex_code_t;
 
 static aex_code_t H0[V], _H[V];
@@ -386,7 +390,7 @@ static void pismall_alloc(void) {
 	s = new params::poly_q[TAU][V];
 	t = new params::poly_q[TAU][R];
 	H = new aex_code_t[TAU][3][V];
-	v = new array < mpz_t, params::poly_q::degree >[3][TAU][V];
+	v = new uint64_t[3][TAU][V][params::poly_q::degree];
 	prover_y = new gr_t[TAU + 1];
 	prover_beta = new gr_t[TAU][3];
 	prover_wt = new gr_t[TAU][3];
@@ -414,7 +418,7 @@ static_assert(params::poly_big::nmoduli == 1, "a symbol is one residue");
 static params::poly_big *aex_poly;                     /* NTT working poly */
 
 static inline void aex_unpack(fmpz_t x, const aex_code_t * c, size_t i) {
-	fmpz_set_ui_array(x, c->w + 2 * i, 2);
+	fmpz_set_ui(x, c->w[i]);
 }
 
 
@@ -465,12 +469,10 @@ static void aex_encode(aex_code_t & out, fmpz_mod_poly_t in0,
 	}
 
 	/* q = 1 mod 2 * AEX_COLS, so this is a genuine length-AEX_COLS transform
-	 * over Z_q, and its outputs are the symbols. aex_pack's two limbs hold a
-	 * symbol and a zero. */
+	 * over Z_q, and its outputs are the symbols. */
 	a.ntt_pow_phi();
 	for (i = 0; i < AEX_COLS; i++) {
-		out.w[2 * i] = a(0, i);
-		out.w[2 * i + 1] = 0;
+		out.w[i] = a(0, i);
 	}
 }
 
@@ -503,16 +505,14 @@ static aex_code_t & aex_row(size_t r) {
 /* Serialise column c of E: entry (r, c) is the c-th codeword symbol of row r. */
 static void aex_column(uint8_t * out, size_t c) {
 	for (size_t r = 0; r < AEX_ROWS; r++) {
-		const uint64_t *d = aex_row(r).w + 2 * c;
-		for (size_t m = 0; m < 2; m++) {
-			for (size_t b = 0; b < 8; b++) {
-				out[(r * 2 + m) * 8 + b] = (uint8_t) (d[m] >> (8 * b));
-			}
+		const uint64_t d = aex_row(r).w[c];
+		for (size_t b = 0; b < 8; b++) {
+			out[r * 8 + b] = (uint8_t) (d >> (8 * b));
 		}
 	}
 }
 
-#define AEX_COLBYTES    (AEX_ROWS * 2 * 8)
+#define AEX_COLBYTES    (AEX_ROWS * 8)
 
 /* Merkle tree over the AEX_COLS column hashes, levels concatenated from the
  * leaves up; the last node is the root. */
@@ -635,14 +635,12 @@ static aex_tree_t aex_tree;
 
 /* Symbol of row r inside a serialised column. */
 static void aex_col_sym(fmpz_t out, const uint8_t * col, size_t r) {
-	uint64_t w[2] = { 0, 0 };
+	uint64_t w = 0;
 
-	for (size_t m = 0; m < 2; m++) {
-		for (size_t b = 0; b < 8; b++) {
-			w[m] |= ((uint64_t) col[(r * 2 + m) * 8 + b]) << (8 * b);
-		}
+	for (size_t b = 0; b < 8; b++) {
+		w |= ((uint64_t) col[r * 8 + b]) << (8 * b);
 	}
-	fmpz_set_ui_array(out, w, 2);
+	fmpz_set_ui(out, w);
 }
 
 #define AEX_ROW_H(k)        (k)
@@ -1511,13 +1509,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	gr_init(prover_y[TAU]);
 	for (size_t i = 0; i < TAU; i++) {
 		gr_init(prover_y[i]);
-		for (size_t j = 0; j < 3; j++) {
-			for (size_t k = 0; k < V; k++) {
-				for (size_t l = 0; l < params::poly_q::degree; l++) {
-					mpz_init(v[j][i][k][l]);
-				}
-			}
-		}
+
 	}
 	gr_init(beta0);
 	for (size_t i = 0; i < TAU; i++) {
@@ -1590,7 +1582,6 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 		}
 		/* P0^{-1} mod P1, for the CRT recombination. With a single prime
 		 * there is nothing to recombine. */
-		aex_u64 pinv = NM == 2 ? aex_pow(P[0] % P[1], P[1] - 2, P[1]) : 0;
 
 		aex_u64 *sres = new aex_u64[NM * N * TAU];
 		aex_u64 *s0res = new aex_u64[NM * N];
@@ -1632,22 +1623,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 				}
 				for (size_t jj = 0; jj < 3; jj++) {
 					for (size_t i = 0; i < TAU; i++) {
-						aex_u64 r0 = out[0][jj][i];
-						if (NM == 1) {
-							mpz_set_ui(v[jj][i][k][l], r0);
-							continue;
-						}
-						/* CRT: r0 + P0 * ((r1 - r0) * P0^{-1} mod P1) */
-						aex_u64 r1 = out[1][jj][i];
-						aex_u64 d = aex_sub(r1 % P[1], r0 % P[1], P[1]);
-						aex_u64 t2 = aex_mul(d, pinv, P[1]);
-						__uint128_t val = (__uint128_t) P[0] * t2 + r0;
-						unsigned long limb[2] = {
-							(unsigned long) (val & 0xffffffffffffffffULL),
-							(unsigned long) (val >> 64)
-						};
-						mpz_import(v[jj][i][k][l], 2, -1, sizeof(limb[0]), 0, 0,
-								limb);
+						v[jj][i][k][l] = out[0][jj][i];
 					}
 				}
 			}
@@ -1675,7 +1651,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 		for (size_t i = 0; i < TAU; i++) {
 			for (size_t j = 0; j < 3; j++) {
 				for (size_t l = 0; l < params::poly_q::degree; l++) {
-					flint_poly_set_coeff_mpz(poly, l, v[j][i][k][l], ctx_q);
+					fmpz_mod_poly_set_coeff_ui(poly, l, v[j][i][k][l], ctx_q);
 				}
 				if (j == 0) {
 					poly_from(zero, s[i][k], ctx_q);
@@ -1768,7 +1744,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 					}
 				}
 				for (size_t l = 0; l < params::poly_q::degree; l++) {
-					flint_poly_set_coeff_mpz(poly, l, v[j][i - 1][k][l],
+					fmpz_mod_poly_set_coeff_ui(poly, l, v[j][i - 1][k][l],
 							ctx_q);
 				}
 				for (int c = 0; c < AEX_DEG; c++) {
@@ -1800,13 +1776,6 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	gr_clear(prover_y[TAU]);
 	for (size_t i = 0; i < TAU; i++) {
 		gr_clear(prover_y[i]);
-		for (size_t j = 0; j < 3; j++) {
-			for (size_t k = 0; k < V; k++) {
-				for (size_t l = 0; l < params::poly_q::degree; l++) {
-					mpz_clear(v[j][i][k][l]);
-				}
-			}
-		}
 	}
 	gr_clear(beta0);
 	for (size_t i = 0; i < TAU; i++) {

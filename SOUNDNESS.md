@@ -310,17 +310,20 @@ rather than from a model. What a pass costs is measured directly and is the
 same at `MSGS = 4` and `MSGS = 64` — 156.3 KB a vote either way, the buffers
 being per vote — so it carries to 1000 unchanged. What is sent once is measured
 at 64 and scaled by the part of it that grows: `Pi_SMALL` is opened columns,
-`ETA · V · (2 + 3 TAU) · 16` bytes of them, flat per vote once `TAU` tracks
-`MSGS`; `Pi_BND` is `V · NTI` openings whose width grows with `sigma`.
+`ETA · V · (2 + 3 TAU) · 8` bytes of them, flat per vote once `TAU` tracks
+`MSGS`; `Pi_BND` is `V · NTI` openings whose width grows with `sigma`. A column
+symbol is an element of `Z_q`, eight bytes; it was sixteen, two limbs sized for
+a CRT over two moduli whose high limb was always zero, and `Pi_SMALL` was
+133.4 KB a vote.
 
 | | per vote |
 | --- | --- |
 | `D_i` and `s_i`, three passes | 135.1 KB |
 | responses of the linear proofs, three passes of three repetitions | 333.9 KB |
 | `P_i`, the commitments to the `sigma_i` | 30.0 KB |
-| `Pi_SMALL`, almost all opened columns | 133.4 KB |
+| `Pi_SMALL`, almost all opened columns | 67.4 KB |
 | `Pi_BND` | 4.2 KB |
-| **total** | **636.6 KB** |
+| **total** | **570.6 KB** |
 
 **The openings are entropy-coded, which is worth 12% of them.** A masked
 opening is a discrete Gaussian, and writing it at the width of the bound the
@@ -351,7 +354,7 @@ repetition — three passes, and three repetitions of each linear proof, which
 Section 5 derives from a 60-bit modulus and cannot be argued away at this
 `LEVEL`. The rest is structural: a third commitment in every linear proof
 because `b_i` is no longer public, and the two membership sub-proofs, of which
-`Pi_SMALL`'s opened columns are 133 KB and flat per vote, since they scale with
+`Pi_SMALL`'s opened columns are 66 KB and flat per vote, since they scale with
 `TAU` rather than with anything a single vote owns.
 
 **Nearly half of it was the first messages, and they are gone.** They were
@@ -405,8 +408,10 @@ already give.
 Open:
 
 * Nothing here has run at the paper's `MSGS = 1000`. The largest exercised is
-  64, with `NTI` at its real 130; peak memory there was under 400 MB, so 1000
-  should be about 6 GB and hours rather than minutes.
+  64, with `NTI` at its real 130. Peak memory grows by 3.0 MB a message
+  (247 MB at 64, 103 MB at 16), so 1000 should take about 3.1 GB. It grew by
+  5.0 MB a message, about 5 GB at 1000, before `Pi_SMALL` kept its codewords
+  and its witness in machine words rather than two-limb symbols and mpz_t.
 * The zero-divisor hypothesis of Section 6: that the extracted challenge
   differences do not all vanish in some component. This is the one hypothesis
   of the theorem that is not discharged, and it is open in the mix-net too.
