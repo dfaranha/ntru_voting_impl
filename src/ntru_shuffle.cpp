@@ -10,6 +10,14 @@
 #include "test.h"
 #include "bench.h"
 #include "assert.h"
+
+/* Every hash here absorbs a ring element as 8 * NTRU_DEGREE bytes. That is the
+ * whole element only while it is one 64-bit residue a coefficient; a second
+ * modulus would leave half of each element out of every challenge, which is
+ * how the 16 * DEGREE bug of SOUNDNESS.md section 8, item 5, arose. */
+static_assert(8 * NTRU_DEGREE == sizeof(params::poly_q::value_type) *
+              params::poly_q::nmoduli * params::poly_q::degree,
+              "the hashes absorb 8 * NTRU_DEGREE bytes a ring element");
 #include "sample_z_small.h"
 
 /*============================================================================*/
