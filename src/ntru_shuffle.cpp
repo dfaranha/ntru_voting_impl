@@ -861,11 +861,21 @@ static void test() {
     {
         params::poly_q alpha[2] = {nfl::uniform(), nfl::uniform()};
 
+        params::poly_q one = 1, b, c;
+
         alpha[0].ntt_pow_phi();
+        one.ntt_pow_phi();
         TEST_ASSERT(util::invert(alpha[1], alpha[0]) == 1, end);
-        alpha[0] = alpha[0] * alpha[1];
-        alpha[0] = alpha[0] * alpha[1];
-        TEST_ASSERT(util::equal(alpha[0], alpha[1]), end);
+        b = alpha[0] * alpha[1];
+        TEST_ASSERT(util::equal(b, one), end);
+        /* In place, as simul_inverse calls it. */
+        b = alpha[0];
+        TEST_ASSERT(util::invert(b, b) == 1 && util::equal(b, alpha[1]), end);
+        /* A zero slot anywhere is a zero divisor, and inv is left alone. */
+        b = alpha[0];
+        b(0, params::poly_q::degree - 1) = 0;
+        c = alpha[1];
+        TEST_ASSERT(util::invert(c, b) == 0 && util::equal(c, alpha[1]), end);
     }
     TEST_END;
 

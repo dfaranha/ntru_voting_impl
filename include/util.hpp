@@ -52,30 +52,51 @@ template <class P> inline bool equal(P const &a, P const &b) {
  * exactly when no slot is zero. Both arguments are in the NTT domain, and they
  * may be the same polynomial. Returns 0 on a zero divisor, leaving inv alone.
  *
- * This replaces a dense inversion through FLINT -- convert to GMP, build a
+ * The slots are inverted together, by Montgomery's trick: the prefix products
+ * a_0 ... a_(i-1), one Fermat inversion of the product of all of them, and a
+ * pass back that peels off one slot at a time. That is three multiplications
+ * a slot and one exponentiation, where a Fermat inversion per slot was about
+ * 90 multiplications a slot. Every slot is checked for zero before anything is
+ * written, and each slot of a is read before inv's is written, so inv may be a.
+ *
+ * This replaced a dense inversion through FLINT -- convert to GMP, build a
  * polynomial mod x^d + 1, call invmod, convert back -- which cost about 95
  * million cycles and could not report a zero divisor without the caller
  * checking the return of fmpz_mod_poly_invmod, which no caller did. */
 template <class P> inline int invert(P &inv, P const &a) {
 	using T = typename P::value_type;
 	nfl::ops::mulmod<T, nfl::simd::serial> mulmod;
+	T pre[P::degree];
 
 	for (size_t cm = 0; cm < P::nmoduli; cm++) {
-		const T q = P::get_modulus(cm);
 		for (size_t i = 0; i < P::degree; i++) {
-			T x = a(cm, i), r = 1;
-
-			if (x == 0) {
+			if (a(cm, i) == 0) {
 				return 0;
 			}
-			/* Fermat: x^(q - 2) = x^-1, since q is prime. */
-			for (T e = q - 2; e != 0; e >>= 1) {
-				if (e & 1) {
-					r = mulmod(r, x, cm);
-				}
-				x = mulmod(x, x, cm);
+		}
+	}
+	for (size_t cm = 0; cm < P::nmoduli; cm++) {
+		const T q = P::get_modulus(cm);
+		T acc = 1, x, r = 1;
+
+		for (size_t i = 0; i < P::degree; i++) {
+			pre[i] = acc;
+			acc = mulmod(acc, a(cm, i), cm);
+		}
+		/* Fermat: acc^(q - 2) = acc^-1, since q is prime. */
+		x = acc;
+		for (T e = q - 2; e != 0; e >>= 1) {
+			if (e & 1) {
+				r = mulmod(r, x, cm);
 			}
-			inv(cm, i) = r;
+			x = mulmod(x, x, cm);
+		}
+		/* r is now (a_0 ... a_i)^-1 for i = degree - 1. */
+		for (size_t i = P::degree; i-- > 0;) {
+			const T ai = a(cm, i);
+
+			inv(cm, i) = mulmod(r, pre[i], cm);
+			r = mulmod(r, ai, cm);
 		}
 	}
 	return 1;
