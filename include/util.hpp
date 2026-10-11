@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
 #include <chrono>
@@ -76,6 +79,79 @@ template <class P> inline int invert(P &inv, P const &a) {
 		}
 	}
 	return 1;
+}
+
+/* The coefficients of a, read as they are stored (the coefficient domain, for
+ * them to mean anything), centred into (-q/2, q/2]. With one modulus below
+ * 2^60 they fit 64 bits, which is what spares a GMP integer a coefficient. */
+template <class P> inline void centred(int64_t out[], P const &a) {
+	static_assert(P::nmoduli == 1, "one modulus, so a coefficient is one residue");
+	const uint64_t q = P::get_modulus(0);
+
+	for (size_t i = 0; i < P::degree; i++) {
+		const uint64_t c = a(0, i);
+		out[i] = (c > q / 2) ? (int64_t) c - (int64_t) q : (int64_t) c;
+	}
+}
+
+/* a = the polynomial with signed coefficients v, in the coefficient domain. */
+template <class P> inline void set_signed(P &a, const int64_t v[]) {
+	static_assert(P::nmoduli == 1, "one modulus, so a coefficient is one residue");
+	const uint64_t q = P::get_modulus(0);
+
+	for (size_t i = 0; i < P::degree; i++) {
+		const uint64_t m = (v[i] < 0 ? (uint64_t) 0 - (uint64_t) v[i] : (uint64_t) v[i]) % q;
+		a(0, i) = (v[i] < 0 && m != 0) ? q - m : m;
+	}
+}
+
+/* dot += sum_k a_k b_k and norm += sum_k b_k^2 over n centred coefficients.
+ * Exact in 128 bits when every |a_k| and |b_k| is below 2^57, so that n <= 2^12
+ * products stay below 2^126; in long double otherwise. The callers turn both
+ * into doubles for a rejection test, as mpz_get_d did. */
+inline void dot_norm(long double &dot, long double &norm, const int64_t a[],
+		const int64_t b[], size_t n) {
+	const int64_t lim = (int64_t) 1 << 57;
+	bool small = n <= 4096;
+
+	for (size_t k = 0; k < n && small; k++) {
+		small = a[k] > -lim && a[k] < lim && b[k] > -lim && b[k] < lim;
+	}
+	if (small) {
+		__int128 d = 0, s = 0;
+
+		for (size_t k = 0; k < n; k++) {
+			d += (__int128) a[k] * b[k];
+			s += (__int128) b[k] * b[k];
+		}
+		dot += (long double) d;
+		norm += (long double) s;
+	} else {
+		for (size_t k = 0; k < n; k++) {
+			dot += (long double) a[k] * (long double) b[k];
+			norm += (long double) b[k] * (long double) b[k];
+		}
+	}
+}
+
+/* The exact squared l2-norm of a's centred coefficients, provided (q/2)^2
+ * times the degree fits 128 bits, which it does for q = 2^59 + 16385 at
+ * degree 2048 (2^127); the check is what keeps it exact for any other q. */
+template <class P> inline unsigned __int128 norm2(P const &a) {
+	static_assert(P::nmoduli == 1, "one modulus, so a coefficient is one residue");
+	const uint64_t q = P::get_modulus(0);
+	unsigned __int128 s = 0;
+
+	if ((unsigned __int128) (q / 2) * (q / 2) > ~(unsigned __int128) 0 / P::degree) {
+		fprintf(stderr, "util::norm2: q is too large for an exact 128-bit norm\n");
+		abort();
+	}
+
+	for (size_t i = 0; i < P::degree; i++) {
+		const uint64_t c = a(0, i), m = (c > q / 2) ? q - c : c;
+		s += (unsigned __int128) m * m;
+	}
+	return s;
 }
 
 template <class P> inline bool is_zero(P const &a) {

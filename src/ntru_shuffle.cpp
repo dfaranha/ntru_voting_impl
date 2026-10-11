@@ -357,47 +357,24 @@ static int simul_inverse(params::poly_q inv[MSGS], params::poly_q m[MSGS]) {
  * challenge. So the dot products and norms of all of them are accumulated
  * here and the decision is taken once, over the batch: testing each vector on
  * its own would multiply the rejection rate by the number of vectors. */
-static void rej_accum(mpz_t dot, mpz_t norm, params::poly_q z[NTRU_WIDTH],
-                      params::poly_q v[NTRU_WIDTH]) {
-    array<mpz_t, params::poly_q::degree> coeffs0, coeffs1;
+static void rej_accum(long double &dot, long double &norm,
+                      params::poly_q z[NTRU_WIDTH], params::poly_q v[NTRU_WIDTH]) {
+    int64_t a[params::poly_q::degree], b[params::poly_q::degree];
     params::poly_q t;
-    mpz_t qDivBy2, tmp;
 
-    mpz_inits(qDivBy2, tmp, nullptr);
-    for (size_t i = 0; i < params::poly_q::degree; i++) {
-        mpz_init2(coeffs0[i], (params::poly_q::bits_in_moduli_product() << 2));
-        mpz_init2(coeffs1[i], (params::poly_q::bits_in_moduli_product() << 2));
-    }
-
-    mpz_fdiv_q_2exp(qDivBy2, params::poly_q::moduli_product(), 1);
     for (int i = 0; i < NTRU_WIDTH; i++) {
         t = z[i];
         t.invntt_pow_invphi();
-        t.poly2mpz(coeffs0);
+        util::centred(a, t);
         t = v[i];
         t.invntt_pow_invphi();
-        t.poly2mpz(coeffs1);
-        for (size_t j = 0; j < params::poly_q::degree; j++) {
-            util::center(coeffs0[j], coeffs0[j],
-                         params::poly_q::moduli_product(), qDivBy2);
-            util::center(coeffs1[j], coeffs1[j],
-                         params::poly_q::moduli_product(), qDivBy2);
-            mpz_mul(tmp, coeffs0[j], coeffs1[j]);
-            mpz_add(dot, dot, tmp);
-            mpz_mul(tmp, coeffs1[j], coeffs1[j]);
-            mpz_add(norm, norm, tmp);
-        }
-    }
-
-    mpz_clears(qDivBy2, tmp, nullptr);
-    for (size_t i = 0; i < params::poly_q::degree; i++) {
-        mpz_clear(coeffs0[i]);
-        mpz_clear(coeffs1[i]);
+        util::centred(b, t);
+        util::dot_norm(dot, norm, a, b, params::poly_q::degree);
     }
 }
 
 /* Accept with probability min(1, exp((-2<z, v> + ||v||^2) / 2 s2) / M). */
-static int rej_decide(mpz_t dot, mpz_t norm, uint64_t s2) {
+static int rej_decide(long double dot, long double norm, uint64_t s2) {
     double r, M = 1.75;
     int64_t seed;
     mpf_t u;
@@ -415,7 +392,7 @@ static int rej_decide(mpz_t dot, mpz_t norm, uint64_t s2) {
     gmp_randseed_ui(state, seed);
     mpf_urandomb(u, state, mpf_get_default_prec());
 
-    r = -2.0 * mpz_get_d(dot) + mpz_get_d(norm);
+    r = (double) (-2.0L * dot + norm);
     r = r / (2.0 * s2);
     r = exp(r) / M;
     result = mpf_get_d(u) > r;
@@ -435,33 +412,28 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
     params::poly_q beta[LIN_REPS];
     params::poly_q t[LIN_REPS], tp[LIN_REPS], _t[LIN_REPS], u[LIN_REPS];
     params::poly_q tmp[NTRU_WIDTH], ptmp[NTRU_WIDTH], _tmp[NTRU_WIDTH];
-    array<mpz_t, params::poly_q::degree> coeffs;
-    mpz_t dot, norm;
+    int64_t coeffs[params::poly_q::degree];
+    long double dot, norm;
     int rej;
-
-    mpz_inits(dot, norm, nullptr);
-    for (size_t i = 0; i < params::poly_q::degree; i++) {
-        mpz_init2(coeffs[i], (params::poly_q::bits_in_moduli_product() << 2));
-    }
 
     do {
         /* Prover samples y, w and y' from Gaussian, once per repetition. */
         for (int j = 0; j < LIN_REPS; j++) {
             for (int i = 0; i < NTRU_WIDTH; i++) {
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
-                    mpz_set_si(coeffs[k], sample_z(0.0, NTRU_SIGMA_C));
+                    coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                y[j][i].mpz2poly(coeffs);
+                util::set_signed(y[j][i], coeffs);
                 y[j][i].ntt_pow_phi();
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
-                    mpz_set_si(coeffs[k], sample_z(0.0, NTRU_SIGMA_C));
+                    coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                w[j][i].mpz2poly(coeffs);
+                util::set_signed(w[j][i], coeffs);
                 w[j][i].ntt_pow_phi();
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
-                    mpz_set_si(coeffs[k], sample_z(0.0, NTRU_SIGMA_C));
+                    coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                _y[j][i].mpz2poly(coeffs);
+                util::set_signed(_y[j][i], coeffs);
                 _y[j][i].ntt_pow_phi();
             }
 
@@ -489,8 +461,8 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
         lin_chal(beta, h);
 
         /* Prover, and one rejection test over all of the openings. */
-        mpz_set_ui(dot, 0);
-        mpz_set_ui(norm, 0);
+        dot = 0;
+        norm = 0;
         for (int j = 0; j < LIN_REPS; j++) {
             for (int i = 0; i < NTRU_WIDTH; i++) {
                 tmp[i] = beta[j] * r[i];
@@ -506,11 +478,6 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
         }
         rej = rej_decide(dot, norm, NTRU_SIGMA_C * NTRU_SIGMA_C);
     } while (rej);
-
-    for (size_t i = 0; i < params::poly_q::degree; i++) {
-        mpz_clear(coeffs[i]);
-    }
-    mpz_clears(dot, norm, nullptr);
 }
 
 static int lin_verifier(params::poly_q z[LIN_REPS][NTRU_WIDTH],
@@ -927,6 +894,88 @@ static void test() {
 
         /* And it is smaller than writing the opening at full width. */
         TEST_ASSERT(bg.bytes() * 2 < bu.bytes(), end);
+    }
+    TEST_END;
+
+    TEST_ONCE("native centring, norms and coefficients agree with GMP")
+    {
+        /* util::centred, norm2, dot_norm and set_signed replace poly2mpz,
+         * center and mpz arithmetic in the rejection tests and the norm
+         * check: compare them on full-range polynomials, on short ones, and
+         * at the extremes, with both of dot_norm's arms. */
+        params::poly_q a, b, c;
+        array<mpz_t, params::poly_q::degree> ca, cb;
+        mpz_t q2, d, n, tmp;
+        int64_t va[params::poly_q::degree], vb[params::poly_q::degree];
+        const int64_t q = (int64_t) params::poly_q::get_modulus(0);
+        bool ok = true;
+
+        mpz_inits(q2, d, n, tmp, nullptr);
+        for (size_t i = 0; i < params::poly_q::degree; i++) {
+            mpz_inits(ca[i], cb[i], nullptr);
+        }
+        mpz_fdiv_q_2exp(q2, params::poly_q::moduli_product(), 1);
+        for (int trial = 0; trial < 4 && ok; trial++) {
+            a = nfl::uniform();
+            b = nfl::uniform();
+            if (trial == 1) { /* short, for dot_norm's exact arm */
+                for (size_t k = 0; k < params::poly_q::degree; k++) {
+                    va[k] = sample_z(0.0, NTRU_SIGMA_C);
+                    vb[k] = (int64_t) (k % 7) - 3;
+                }
+                util::set_signed(a, va);
+                util::set_signed(b, vb);
+            }
+            if (trial == 2) { /* the extremes */
+                for (size_t k = 0; k < params::poly_q::degree; k++) {
+                    a(0, k) = (k & 1) ? (uint64_t) q / 2 : (uint64_t) q / 2 + 1;
+                    b(0, k) = (k & 2) ? 1 : (uint64_t) q - 1;
+                }
+            }
+            a.poly2mpz(ca);
+            b.poly2mpz(cb);
+            util::centred(va, a);
+            util::centred(vb, b);
+            mpz_set_ui(d, 0);
+            mpz_set_ui(n, 0);
+            for (size_t k = 0; k < params::poly_q::degree; k++) {
+                util::center(ca[k], ca[k], params::poly_q::moduli_product(), q2);
+                util::center(cb[k], cb[k], params::poly_q::moduli_product(), q2);
+                ok &= mpz_cmp_si(ca[k], va[k]) == 0 && mpz_cmp_si(cb[k], vb[k]) == 0;
+                mpz_mul(tmp, ca[k], cb[k]);
+                mpz_add(d, d, tmp);
+                mpz_mul(tmp, cb[k], cb[k]);
+                mpz_add(n, n, tmp);
+            }
+            /* norm2 is exact: compare its two halves with GMP's. */
+            unsigned __int128 n2 = util::norm2(b);
+            mpz_set_ui(tmp, (uint64_t) (n2 >> 64));
+            mpz_mul_2exp(tmp, tmp, 64);
+            mpz_add_ui(tmp, tmp, (uint64_t) n2);
+            ok &= mpz_cmp(tmp, n) == 0;
+            /* dot_norm to a long double's precision. */
+            long double ld = 0, ln = 0;
+            util::dot_norm(ld, ln, va, vb, params::poly_q::degree);
+            ok &= fabsl(ld - (long double) mpz_get_d(d)) <= 1e-15L * fabsl((long double) mpz_get_d(n)) + 1;
+            ok &= fabsl(ln - (long double) mpz_get_d(n)) <= 1e-15L * fabsl((long double) mpz_get_d(n)) + 1;
+            /* set_signed inverts centred, and reduces any int64. */
+            util::set_signed(c, va);
+            ok &= util::equal(a, c);
+            va[0] = INT64_MIN;
+            va[1] = INT64_MAX;
+            util::set_signed(c, va);
+            mpz_set_si(tmp, INT64_MIN);
+            mpz_fdiv_r(tmp, tmp, params::poly_q::moduli_product());
+            ok &= mpz_cmp_ui(tmp, c(0, 0)) == 0;
+            mpz_set_si(tmp, INT64_MAX);
+            mpz_fdiv_r(tmp, tmp, params::poly_q::moduli_product());
+            ok &= mpz_cmp_ui(tmp, c(0, 1)) == 0;
+        }
+        for (size_t i = 0; i < params::poly_q::degree; i++) {
+            mpz_clears(ca[i], cb[i], nullptr);
+        }
+        mpz_clears(q2, d, n, tmp, nullptr);
+        TEST_ASSERT(ok, end);
     }
     TEST_END;
 
