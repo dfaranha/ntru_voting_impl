@@ -19,6 +19,19 @@ static_assert(8 * NTRU_DEGREE == sizeof(params::poly_q::value_type) *
               params::poly_q::nmoduli * params::poly_q::degree,
               "the hashes absorb 8 * NTRU_DEGREE bytes a ring element");
 #include "sample_z_small.h"
+#include <time.h>
+
+/* Wall-clock time run() spends proving, verifying, and on what both parties
+ * compute (the messages in NTT form), summed over its calls;
+ * ntru_voting.cpp reports them per mix server. */
+static double shuffle_t_prove, shuffle_t_verify, shuffle_t_shared;
+
+static double shuffle_now(void) {
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
 
 /*============================================================================*/
 /* Private definitions                                                        */
@@ -718,6 +731,7 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
     params::poly_q tau[SHUFFLE_REPS], mu[SHUFFLE_REPS];
     params::poly_q beta[SHUFFLE_REPS], vbeta[SHUFFLE_REPS];
     int result = 1;
+    double t0 = shuffle_now(), t1;
 
     for (size_t i = 0; i < MSGS; i++) {
         ms[i] = m[i];
@@ -725,6 +739,8 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
         _ms[i] = _m[i];
         _ms[i].ntt_pow_phi();
     }
+    t1 = shuffle_now();
+    shuffle_t_shared += t1 - t0;
 
     /* The first message: the commitments to the sigma_i and the two sub-proofs
      * that place them in D. They are sent once and shared by every pass, so
@@ -742,6 +758,8 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
             return 0;
         }
     }
+    t0 = shuffle_now();
+    shuffle_t_prove += t0 - t1;
 
     /* The sub-proofs about the P_i are checked once, here: they are the first
      * message and do not belong to any one pass. */
@@ -751,21 +769,31 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
     if (!pibnd_short_verify(bnd, key, pcom, MSGS)) {
         return 0;
     }
+    t1 = shuffle_now();
+    shuffle_t_verify += t1 - t0;
 
     /* Twice, because the verifier derives its challenges from the transcript
      * rather than taking the prover's word for them; the two must agree. */
     shuffle_beta_hash(beta, com, pcom, d, _ms, tau, mu);
+    t0 = shuffle_now();
+    shuffle_t_prove += t0 - t1;
     shuffle_beta_hash(vbeta, com, pcom, d, _ms, tau, mu);
+    t1 = shuffle_now();
+    shuffle_t_verify += t1 - t0;
 
     for (int rep = 0; rep < SHUFFLE_REPS; rep++) {
+        t0 = shuffle_now();
         if (!shuffle_prover_respond(y, w, _y, lh, &d[rep * MSGS],
                                     pcom, pr, &_r[rep * MSGS],
                                     &theta[rep * MSGS], s, com, ms, _ms, r,
                                     beta[rep], tau[rep], mu[rep], key)) {
             return 0;
         }
+        t1 = shuffle_now();
+        shuffle_t_prove += t1 - t0;
         result &= shuffle_verifier(y, w, _y, lh, &d[rep * MSGS], pcom, s, com,
                                    _ms, vbeta[rep], tau[rep], mu[rep], key);
+        shuffle_t_verify += shuffle_now() - t1;
     }
 
     return result;
