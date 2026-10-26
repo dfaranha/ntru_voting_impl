@@ -26,7 +26,7 @@ LIBS     = deps/libnfllib_static.a -lgmp -lmpfr -lquadmath
 FLINT    = -lflint
 
 OBJ      = obj
-BIN      = ntru ntru_bdlop ntru_pibnd ntru_pismall ntru_shuffle
+BIN      = ntru ntru_bdlop ntru_pibnd ntru_pismall ntru_shuffle ntru_voting
 
 # The first rule below is the config stamp, and its target contains a slash, so
 # make would take it as the default goal and a bare `make` would build nothing.
@@ -109,6 +109,17 @@ ntru_shuffle: src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o \
 		$(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o \
 		$(COMMON) $(BLAKE3) $(STAMP)
 	$(CPP) $(CFLAGS) -DMAIN src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o \
+		$(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
+		$(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
+
+# The mix-net end to end: voters, mix servers and trustees. It includes
+# src/ntru_shuffle.cpp, without MAIN, for the proof of shuffle, so it links what
+# ntru_shuffle links plus the distributed NTRU of src/ntru.cpp.
+ntru_voting: src/ntru_voting.cpp src/ntru_shuffle.cpp $(OBJ)/ntru.o \
+		$(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o \
+		$(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) \
+		$(STAMP)
+	$(CPP) $(CFLAGS) src/ntru_voting.cpp $(OBJ)/ntru.o $(OBJ)/ntru_bdlop.o \
 		$(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
 		$(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
 

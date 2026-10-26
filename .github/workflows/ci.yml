@@ -82,13 +82,15 @@ jobs:
       # instance of ntru_pismall and the short instance of ntru_pibnd as well;
       # NTI is shrunk because the runner has neither the memory nor the time
       # for the 130 columns the soundness of the norm proof needs.
-      - name: Test ntru_shuffle
+      # ntru_voting runs the mix-net end to end on the same build.
+      - name: Test ntru_shuffle and the mix-net end to end
         run: |
           for n in 4 5; do
             make clean
             make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DMSGS=$n -DNTI=8" \
-                 FLINT="-L$FLINT_PREFIX/lib -lflint" ntru_shuffle
+                 FLINT="-L$FLINT_PREFIX/lib -lflint" ntru_shuffle ntru_voting
             ./ntru_shuffle
+            ./ntru_voting
           done
 
   sanitizers:
@@ -141,9 +143,10 @@ jobs:
           make CONFIG="-I$FLINT_PREFIX/include -DBENCH=1 -DTAU=8 -DNTI=8 -DMSGS=4" \
                FLINT="-L$FLINT_PREFIX/lib -lflint" \
                OPT="-O1 -march=native -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
-               ntru_bdlop ntru ntru_pibnd ntru_pismall ntru_shuffle
+               ntru_bdlop ntru ntru_pibnd ntru_pismall ntru_shuffle ntru_voting
           ./ntru_bdlop
           ./ntru
           ./ntru_pibnd
           ./ntru_pismall
           ./ntru_shuffle
+          ./ntru_voting

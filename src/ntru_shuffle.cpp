@@ -771,6 +771,8 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
     return result;
 }
 
+#ifdef MAIN
+/* The prover alone, for the benchmarks. */
 static void run2(commit_t com[MSGS], vector<params::poly_q> m,
                vector<params::poly_q> _m, vector<params::poly_q> sigma,
                comkey_t &key, vector<params::poly_q> r[MSGS]) {
@@ -799,10 +801,6 @@ static void run2(commit_t com[MSGS], vector<params::poly_q> m,
                                ms, _ms, r, beta[rep], tau[rep], mu[rep], key);
     }
 }
-
-
-
-#ifdef MAIN
 
 /**
  * Mix two ring elements by swapping half of their NTT slots. R_q splits into
