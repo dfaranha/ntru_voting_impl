@@ -166,6 +166,8 @@ void bgv_decrypt(params::poly_p &m, bgvenc_t &c, params::poly_q &sk);
 void ntru_keygen(params::poly_q &pk, params::poly_q &sk);
 void ntru_sample_message(params::poly_p &r);
 void ntru_encrypt(params::poly_q &c, params::poly_q &pk, params::poly_p &m);
+void ntru_encrypt_rand(params::poly_q &c, params::poly_q &pk, params::poly_p &m,
+                       params::poly_q &s, params::poly_q &e);
 
 
 #endif

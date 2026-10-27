@@ -127,7 +127,10 @@ void ntru_keyshare(params::poly_q s[], size_t shares, params::poly_q &sk) {
     s[0] = t;
 }
 
-void ntru_encrypt(params::poly_q &c, params::poly_q &pk, params::poly_p &m) {
+/* As ntru_encrypt, and also return the randomness s and e, in the coefficient
+ * domain, for the voter's ballot proof. */
+void ntru_encrypt_rand(params::poly_q &c, params::poly_q &pk, params::poly_p &m,
+                       params::poly_q &s_out, params::poly_q &e_out) {
     params::poly_q s = nfl::ZO_dist();
     params::poly_q e = nfl::ZO_dist();
     params::poly_q m_;
@@ -137,6 +140,8 @@ void ntru_encrypt(params::poly_q &c, params::poly_q &pk, params::poly_p &m) {
         mpz_init2(coeffs[i], params::poly_q::bits_in_moduli_product() << 2);
     }
 
+    s_out = s;
+    e_out = e;
     s.ntt_pow_phi();
     e.ntt_pow_phi();
 
@@ -150,6 +155,12 @@ void ntru_encrypt(params::poly_q &c, params::poly_q &pk, params::poly_p &m) {
     for (size_t i = 0; i < params::poly_q::degree; i++) {
         mpz_clear(coeffs[i]);
     }
+}
+
+void ntru_encrypt(params::poly_q &c, params::poly_q &pk, params::poly_p &m) {
+    params::poly_q s, e;
+
+    ntru_encrypt_rand(c, pk, m, s, e);
 }
 
 void ntru_add(params::poly_q &c, params::poly_q &c1, params::poly_q &c2) {

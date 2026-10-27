@@ -5,6 +5,7 @@ Code accompannying the paper "More Efficient Post-Quantum Electronic Voting from
 Dependencies are the [NFLlib](https://github.com/quarkslab/NFLlib) and [FLINT](https://flintlib.org/doc/) libraries.
 NFLLib is already included in this repository, but instructions for installing its dependencies can be found in the link above.
 FLINT is usually included in package managers and can be easily installed in most systems out there; version 3.1 or later is required, since the code uses the `flint_rand_init()` spelling introduced there.
+The voters' ballot proofs use [LaZer](https://github.com/lazer-crypto/lazer), the submodule `third_party/lazer` (branch `skip-zeros` of [this fork](https://github.com/dfaranha/lazer), with fixes and speed-ups); fetch it with `git submodule update --init third_party/lazer`. The first `make` of `ntru_voting` builds it, HEXL included, and it needs MPFR.
 
 ### Building dependencies
 
@@ -34,18 +35,35 @@ The binaries respectively implement the BDLOP commitment scheme, the distributed
 
 `ntru_voting` puts them together, with `MSGS` voters, 4 mix servers and 4
 trustees: the trustees share an NTRU key; each voter encrypts a vote for one of 8
-candidates; each mix server in turn re-encrypts every ciphertext with a fresh
+candidates and proves the ballot well formed, which the board checks (below);
+each mix server in turn re-encrypts every ciphertext with a fresh
 encryption of zero, commits to that encryption of zero and adds the input into
 the commitment, which makes it a commitment to the re-encryption, and publishes
 the re-encryptions permuted with a proof of shuffle over those commitments; and
 the trustees' partial decryptions of the last list are combined and tallied. It
-also checks that a mix server that changes an output, or replaces a ballot with
-one of its own, is rejected. What this branch does not implement is not in it:
-the voters' ballot proofs, the proof that each re-encryption adds an encryption
-of zero with short randomness, and the trustees' proofs of correct decryption.
+also checks that a ballot proof moved to another voter or kept for a changed
+ciphertext is rejected, that a ballot for two candidates cannot be proven, and
+that a mix server that changes an output, or replaces a ballot with one of its
+own, is rejected. What this branch does not implement is not in it: the proof
+that each re-encryption adds an encryption of zero with short randomness, and
+the trustees' proofs of correct decryption.
+
+The ballot proof (`src/ntru_ballot.c`) shows, with LaZer's linear proofs, that
+c = 2hs + 2e + m with s, e ternary and short and m = X^j or 0: one vote or
+none. It proves m binary and equal to a u with ||u|| <= 1, which leaves only
+those. It is bound to the election and the voter, so it cannot be copied to
+another voter's ballot. LaZer lifts the statement to its ring of degree 64 and
+an 84-bit proof modulus; `lazer/ntru_ballot.py` describes it, and
+`lazer/ntru_ballot.h` is generated from it, from `third_party/lazer/scripts`,
+with `sage lin-codegen.sage ../../../lazer/ntru_ballot.py >
+../../../lazer/ntru_ballot.h`. LaZer's default target, a root Hermite factor
+of 1.0044, is about 102 bits under the lattice-estimator here, so the file asks
+for 1.0036: MLWE 136.1 and MSIS 141.3 bits, knowledge error 2^-127. The proof
+is about 44 KiB.
 `make CONFIG=-DMSGS=25 ntru_voting` runs the same election size as the
 end-to-end tests of the other codebases, 25 voters and 8 candidates, in about
-40 seconds; `-DNCAND=<n>` and `-DMIXERS=<n>` set the candidates and the mix
+55 seconds, about 33 of them the ballot proofs (0.8 s to prove and 0.5 s to
+check each, on a laptop); `-DNCAND=<n>` and `-DMIXERS=<n>` set the candidates and the mix
 servers.
 
 __WARNING__: This is an academic proof of concept, and in particular has not received code review. This implementation is NOT ready for any type of production use.

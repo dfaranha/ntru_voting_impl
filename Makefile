@@ -25,6 +25,19 @@ LIBS     = deps/libnfllib_static.a -lgmp -lmpfr -lquadmath
 # polynomial; everything else works through NFLlib alone.
 FLINT    = -lflint
 
+# LaZer, for the voter's ballot proof (src/ntru_ballot.c), is the submodule
+# third_party/lazer: branch skip-zeros of dfaranha/lazer, LaZer with fixes and
+# speed-ups. Its own Makefile builds it on first use, HEXL included; fetch it
+# with git submodule update --init third_party/lazer. The ballot proof is C,
+# compiled with CC against LaZer's headers; the C++ code calls it through
+# include/ntru_ballot.h.
+CC       = gcc
+LAZER    = third_party/lazer
+LAZER_LIB = $(LAZER)/liblazer.a
+HEXL_LIB = $(LAZER)/third_party/hexl-development/build/hexl/lib64/libhexl.a
+LAZER_LIBS = $(LAZER_LIB) $(HEXL_LIB) -lmpfr -lstdc++
+CCFLAGS  = -O3 -march=native -mtune=native -Wall -Wextra -ggdb -I include -I $(LAZER)
+
 OBJ      = obj
 BIN      = ntru ntru_bdlop ntru_pibnd ntru_pismall ntru_shuffle ntru_voting
 
@@ -66,6 +79,17 @@ $(OBJ)/%.o: src/%.c $(STAMP) | $(OBJ)
 
 $(OBJ)/%.o: src/%.cpp $(STAMP) | $(OBJ)
 	$(CPP) $(CFLAGS) -c $< -o $@
+
+# LaZer's library and HEXL, built by LaZer's Makefile.
+$(LAZER_LIB):
+	$(MAKE) -C $(LAZER) liblazer.a
+$(HEXL_LIB): $(LAZER_LIB)
+
+# The ballot proof, in C against LaZer (its parameters: lazer/ntru_ballot.h,
+# generated from lazer/ntru_ballot.py by LaZer's lin-codegen.sage).
+$(OBJ)/ntru_ballot.o: src/ntru_ballot.c include/ntru_ballot.h lazer/ntru_ballot.h \
+		$(LAZER_LIB) | $(OBJ)
+	$(CC) $(CCFLAGS) -c $< -o $@
 
 # BLAKE3 is bundled as a mix of C and assembly; keep it in a single object.
 $(BLAKE3): $(BLAKE3_SRC) | $(OBJ)
@@ -117,11 +141,12 @@ ntru_shuffle: src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o \
 # ntru_shuffle links plus the distributed NTRU of src/ntru.cpp.
 ntru_voting: src/ntru_voting.cpp src/ntru_shuffle.cpp $(OBJ)/ntru.o \
 		$(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o \
-		$(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) \
-		$(STAMP)
+		$(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o $(OBJ)/ntru_ballot.o \
+		$(COMMON) $(BLAKE3) $(STAMP)
 	$(CPP) $(CFLAGS) src/ntru_voting.cpp $(OBJ)/ntru.o $(OBJ)/ntru_bdlop.o \
 		$(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
-		$(OBJ)/sample_z_large.o $(COMMON) $(BLAKE3) -o $@ $(LIBS) $(FLINT)
+		$(OBJ)/sample_z_large.o $(OBJ)/ntru_ballot.o $(COMMON) $(BLAKE3) -o $@ \
+		$(LIBS) $(LAZER_LIBS) $(FLINT)
 
 clean:
 	rm -rf $(OBJ) $(BIN) *.d
