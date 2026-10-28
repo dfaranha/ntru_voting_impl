@@ -49,9 +49,13 @@ void ntru_distdec(params::poly_q & dsj, params::poly_q & ci, params::poly_q & dk
 void ntru_comb(params::poly_p & m, params::poly_q c, params::poly_q dsj[],
 		size_t shares);
 
-/* Mix servers. */
+/* Mix servers. The decryption bounds in common.h were set for the noise of 4
+ * servers' re-encryptions, so fewer are fine and more need them recomputed. */
 #ifndef MIXERS
 #define MIXERS 		4
+#endif
+#if MIXERS < 1 || MIXERS > 4
+#error "ntru_voting_impl: the decryption bounds allow 1 to 4 mix servers (MIXERS)"
 #endif
 /* Candidates: a vote for candidate j is X^j. */
 #ifndef NCAND

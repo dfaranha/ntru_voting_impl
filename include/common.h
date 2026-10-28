@@ -42,8 +42,17 @@ using namespace std;
 #endif
 /* Degree of the irreducible polynomial. */
 #define DEGREE      2048//4096
-/* Parties that run the distributed decryption protocol. */
+/* Parties that run the distributed decryption protocol: the trustees, set
+ * like the other election sizes with make CONFIG="-DPARTIES=...". It can only
+ * be 4: NTRU_BOUND_D below splits the drowning noise B_Drown over xi_2 = 4
+ * decryption servers, so fewer would not drown B_Dec and more would break
+ * B_Dec + p xi_2 B_Drown <= q/2. Another value needs both recomputed. */
+#ifndef PARTIES
 #define PARTIES     4
+#endif
+#if PARTIES != 4
+#error "ntru_voting_impl: B_Drown (NTRU_BOUND_D) and q are derived for 4 decryption servers, so PARTIES must be 4"
+#endif
 /* Security level for Distributed Decryption. */
 
 /*
@@ -65,7 +74,7 @@ using namespace std;
  * It costs nothing in practice, since B_Dec is a worst case for ||f c||_inf
  * that an honest ciphertext is nowhere near. */
 #define NTRU_BOUND_D "36028797018963968"
-#define NTRU_PARTIES 4
+#define NTRU_PARTIES PARTIES
 /* Dimension of the committed messages. */
 #ifndef NTRU_SIZE
 #define NTRU_SIZE 1
