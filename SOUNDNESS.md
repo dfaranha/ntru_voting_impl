@@ -31,8 +31,8 @@ product is unchanged. Before the repair, the proof of shuffle accepted it.
 
 ## 2. The ring
 
-`q = 576460752303439873 = 2^59 + 16385` is prime, `d = 2048`, and NFLlib's NTT
-requires `q = 1 mod 2d`, which holds: `q - 1` is divisible by `2^14`. So
+`q = 576460752303439873 = 2^59 + 16385` is prime, `d = 2048`, and the NTT (NFLlib's,
+and `include/zq.hpp`'s on `no-nfllib`) requires `q = 1 mod 2d`, which holds: `q - 1` is divisible by `2^14`. So
 `x^d + 1` splits into `d` linear factors and
 
     R_q = Z_q[x]/(x^2048 + 1)  ~  (Z_q)^2048.

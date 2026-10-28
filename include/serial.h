@@ -37,7 +37,7 @@ namespace serial {
 static inline size_t qbits(void) {
 	static size_t b = 0;
 	if (b == 0) {
-		uint64_t q = nfl::params < uint64_t >::P[0];
+		uint64_t q = params::poly_q::get_modulus(0);
 		while (q != 0) {
 			b++;
 			q >>= 1;
@@ -163,7 +163,7 @@ static inline void get_uniform(bits & b, params::poly_q & p) {
 
 /** Write a masked opening, Rice-coded about its own width. */
 static inline void put_gauss(bits & b, const params::poly_q & p, double sigma) {
-	const uint64_t q = nfl::params < uint64_t >::P[0];
+	const uint64_t q = params::poly_q::get_modulus(0);
 	int k = rice_k(sigma);
 
 	for (size_t i = 0; i < params::poly_q::degree; i++) {
@@ -172,7 +172,7 @@ static inline void put_gauss(bits & b, const params::poly_q & p, double sigma) {
 }
 
 static inline void get_gauss(bits & b, params::poly_q & p, double sigma) {
-	const uint64_t q = nfl::params < uint64_t >::P[0];
+	const uint64_t q = params::poly_q::get_modulus(0);
 	int k = rice_k(sigma);
 
 	for (size_t i = 0; i < params::poly_q::degree; i++) {

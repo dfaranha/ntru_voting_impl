@@ -9,7 +9,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
-#include <nfl.hpp>
+#include "zq.hpp"
 
 namespace util {
 /// Helper functions for messages conversion
@@ -65,7 +65,8 @@ template <class P> inline bool equal(P const &a, P const &b) {
  * checking the return of fmpz_mod_poly_invmod, which no caller did. */
 template <class P> inline int invert(P &inv, P const &a) {
 	using T = typename P::value_type;
-	nfl::ops::mulmod<T, nfl::simd::serial> mulmod;
+	static_assert(P::nmoduli == 1 && P::get_modulus(0) == zq::Q, "a zq polynomial");
+	auto mulmod = [](T x, T y, size_t) { return zq::mulmod(x, y); };
 	T pre[P::degree];
 
 	for (size_t cm = 0; cm < P::nmoduli; cm++) {

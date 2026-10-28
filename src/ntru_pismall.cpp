@@ -733,7 +733,7 @@ static void aex_root_tau(fmpz_t w, const fmpz_mod_ctx_t ctx) {
 	fmpz_one(m);
 	fmpz_zero(acc);
 	for (size_t j = 0; j < params::poly_q::nmoduli; j++) {
-		fmpz_set_ui(pj, nfl::params < uint64_t >::P[j]);
+		fmpz_set_ui(pj, params::poly_q::get_modulus(j));
 		fmpz_sub_ui(e, pj, 1);
 		fmpz_divexact_ui(e, e, TAU);
 		for (ulong g = 2;; g++) {
@@ -1397,9 +1397,9 @@ static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
 	static aex_u64 P0, P1, P0inv;
 	const size_t N = params::poly_q::degree;
 	if (!ready) {
-		P0 = nfl::params < uint64_t >::P[0];
+		P0 = params::poly_q::get_modulus(0);
 		if (params::poly_q::nmoduli == 2) {
-			P1 = nfl::params < uint64_t >::P[1];
+			P1 = params::poly_q::get_modulus(1);
 			P0inv = aex_pow(P0 % P1, P1 - 2, P1);
 		}
 		ready = 1;
@@ -1568,7 +1568,7 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 		aex_u64 P[2], wt[2], w4[2];
 		aex_tw_t TT[2], T4[2];
 		for (size_t j = 0; j < NM; j++) {
-			P[j] = nfl::params < uint64_t >::P[j];
+			P[j] = params::poly_q::get_modulus(j);
 			for (ulong g = 2;; g++) {
 				wt[j] = aex_pow(g, (P[j] - 1) / TAU, P[j]);
 				if (aex_pow(wt[j], TAU / 2, P[j]) != 1) break;
@@ -2446,7 +2446,7 @@ static void test(flint_rand_t rand) {
 		live = 1;
 		for (size_t i = 0; i < params::poly_q::nmoduli; i++) {
 			fmpz_t pi, e, w;
-			fmpz_init_set_ui(pi, nfl::params < uint64_t >::P[i]);
+			fmpz_init_set_ui(pi, params::poly_q::get_modulus(i));
 			fmpz_init(e);
 			fmpz_init(w);
 			fmpz_sub_ui(e, pi, 1);
@@ -2456,7 +2456,7 @@ static void test(flint_rand_t rand) {
 			fmpz_sub_ui(e, pi, 1);
 			live &= fmpz_equal(w, e);
 			/* p = 1 mod 4, the other half of the degree-4 criterion. */
-			live &= (nfl::params < uint64_t >::P[i] % 4 == 1);
+			live &= (params::poly_q::get_modulus(i) % 4 == 1);
 			fmpz_clear(pi);
 			fmpz_clear(e);
 			fmpz_clear(w);

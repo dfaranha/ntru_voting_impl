@@ -1,8 +1,7 @@
 CPP      = g++
 
-# NFLlib predates C++20 and uses std::allocator<void>::const_pointer, which was
-# removed in that standard, so the language level has to be pinned. The GNU
-# dialect is required for the `Q` suffix on __float128 literals in param.h.
+# The GNU dialect is required for the `Q` suffix on __float128 literals in
+# param.h, so the language level is pinned.
 STD      = -std=gnu++17
 
 # A params::poly_q is 32 KiB, so it is very easy to write a function whose
@@ -10,19 +9,19 @@ STD      = -std=gnu++17
 # usual default limit, and every function here is well under it.
 WARN     = -Wall -Wframe-larger-than=4194304
 OPT      = -O3 -march=native -mtune=native -flto
-INCLUDE  = -I NFLlib/include/ -I NFLlib/include/nfl -I NFLlib/include/nfl/prng -I include
-DEFINE   = -DNFL_OPTIMIZED=ON -DNTT_AVX2
+INCLUDE  = -I include
+DEFINE   =
 # Extra defines for a build, e.g. make CONFIG="-DMSGS=4 -DTAU=8 -DBENCH=1" to
 # shrink the proofs enough to run them on a machine without tens of gigabytes
 # of RAM. TAU must stay a power of two.
 CONFIG   =
 CFLAGS   = $(STD) $(OPT) $(WARN) -ggdb $(INCLUDE) $(DEFINE) $(CONFIG) -MMD -MP
 
-LIBS     = deps/libnfllib_static.a -lgmp -lmpfr -lquadmath
+LIBS     = -lgmp -lmpfr -lquadmath
 # FLINT is a system library here, but CI builds its own, so keep the flags in
 # one variable that a build can override. Only ntru_pismall needs it now that
 # ring inversion goes through the NTT slots rather than a dense FLINT
-# polynomial; everything else works through NFLlib alone.
+# polynomial; everything else works through zq alone.
 FLINT    = -lflint
 
 # LaZer, for the voter's ballot proof (src/ntru_ballot.c), is the submodule
@@ -63,7 +62,8 @@ BLAKE3_SRC = src/blake3/blake3.c src/blake3/blake3_dispatch.c \
              src/blake3/blake3_avx2_x86-64_unix.S \
              src/blake3/blake3_avx512_x86-64_unix.S
 BLAKE3   = $(OBJ)/blake3.o
-COMMON   = $(OBJ)/test.o $(OBJ)/bench.o $(OBJ)/cpucycles.o
+COMMON   = $(OBJ)/test.o $(OBJ)/bench.o $(OBJ)/cpucycles.o \
+           $(OBJ)/fastrandombytes.o $(OBJ)/randombytes.o
 
 .PHONY: all clean
 .SECONDARY:

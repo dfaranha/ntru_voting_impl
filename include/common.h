@@ -2,10 +2,11 @@
 
 #include <gmpxx.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iostream>
 #include <memory>
-#include <nfl.hpp>
+#include "zq.hpp"
 #include <cmath>
 
 #include "bench.h"
@@ -106,11 +107,15 @@ using namespace std;
  * named a 62-bit modulus and the other the paper's q. */
 static_assert(NTRU_DEGREE == DEGREE, "the scheme has one ring dimension");
 
+/* The rings, in include/zq.hpp. poly_p holds plaintexts, which are only ever
+ * filled and read through mpz2poly and poly2mpz, so it is a zq polynomial too
+ * rather than a ring of its own. */
 namespace params {
-    using poly_p = nfl::poly_from_modulus<uint32_t, DEGREE, 30>;
-    using poly_q = nfl::poly_from_modulus<uint64_t, DEGREE, 60>;
-    using poly_big = nfl::poly_from_modulus<uint64_t, 4 * DEGREE, 60>;
+    using poly_p = zq::poly<DEGREE>;
+    using poly_q = zq::poly<DEGREE>;
+    using poly_big = zq::poly<4 * DEGREE>;
 }
+static_assert(params::poly_q::get_modulus(0) == NTRU_PRIMEQ, "zq's q is NTRU_PRIMEQ");
 
 /*============================================================================*/
 /* Type definitions                                                           */

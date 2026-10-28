@@ -61,7 +61,7 @@ static constexpr int shuffle_ilog2(unsigned long long x) {
     return x <= 1 ? 0 : 1 + shuffle_ilog2(x >> 1);
 }
 
-static constexpr unsigned long long P_MIN = nfl::params<uint64_t>::P[0];
+static constexpr unsigned long long P_MIN = params::poly_q::get_modulus(0);
 static constexpr int SHUFFLE_BITS =
         shuffle_ilog2(P_MIN) - shuffle_ilog2(2 * (unsigned long long) MSGS - 1);
 static_assert(SHUFFLE_BITS > 0, "MSGS is too large for the modulus");
