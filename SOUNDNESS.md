@@ -10,6 +10,12 @@ Everything below is checked by tests in `src/ntru_shuffle.cpp` and
 `src/ntru_pismall.cpp` rather than asserted: each link has a test that fails if
 the link is removed.
 
+On the `full-protocol` branch, Section 10 describes the proofs of
+re-encryption and of decryption that the election now runs around the proof of
+shuffle, the change to `pismall_hash` they brought, which the membership proof
+of Section 4.1 shares, and where the exact `\Pi_Bnd` departs from the paper's
+digit decomposition.
+
 ## 1. The attack
 
 The published proof of shuffle argues a permutation through Neff's product: the
@@ -415,3 +421,118 @@ Open:
 * The zero-divisor hypothesis of Section 6: that the extracted challenge
   differences do not all vanish in some component. This is the one hypothesis
   of the theorem that is not discharged, and it is open in the mix-net too.
+
+## 10. The rest of the mix-net: the proofs of re-encryption and of decryption
+
+The sections above are about the proof of shuffle. On the `full-protocol`
+branch `ntru_voting` also runs the two proofs of Figures 5 and 6 of the paper
+that were not in the repository: `\Pi_Small` on the mix servers' encryptions of
+zero, without which nothing ties a mix server's shuffle to its input list, and
+the trustees' proofs of correct decryption. This section records how they are
+instantiated and where that departs from the paper. Both `\Pi_Small` instances
+are builds of `src/ntru_pismall.cpp`, the same proof as the membership
+sub-proof of Section 4.1, with its `ETA = 550` and so its `2^-128.2`; every
+coefficient set below is `{-1, 0, 1}`, which is exact over the prime `q`.
+
+### 10.1 The proof of re-encryption
+
+Each mix server publishes `P_i = [[c'_i]]`, a commitment to the encryption of
+zero `c'_i = p (h s'_i + e'_i)` it adds to the `i`-th input, and one
+`\Pi_Small` over all of them (`pismall_mix_prove`, built with `-DPISMALL_MIX`)
+for the relation `A_M s = P_i` of Figure 5:
+
+```
+row 0    P_i.c1    = r_0 + sum_j A1[0][j] r_{j+1}
+row 1    P_i.c2[0] = sum_j A2[0][j] r_j + p h s'_i + p e'_i
+```
+
+with `r`, `s'_i` and `e'_i` ternary: `R = 2` rows and `V = WIDTH + 2`
+components. An NTRU ciphertext is one ring element, so this keeps the two rows
+of a commitment equation, and the prover's own commitment inside `\Pi_Small`
+fits the key's `SIZE = 2` as it does for the membership proof.
+
+The verifier forms the commitments the proof of shuffle is about itself,
+`P_i + (0, c_i)`, from the published `P_i` and the input list
+(`verifier_commitments` in `src/ntru_voting.cpp`). Before this branch the proof
+of shuffle ran on commitments the mix server computed, and a server that
+committed to `own - c_i` in place of `c'_i` had its commitment open to a
+ciphertext `own` of its choosing, with every check passing. The test "a mix
+server that commits to other than a zero is rejected" builds that commitment
+and checks that `\Pi_Small` refuses it.
+
+`pismall_hash` now absorbs the statement, `A` and every `t_i`, after the Merkle
+root and the prover's commitment. It took neither before, so the challenges did
+not depend on what was being proven and a prover could pick its `t_i` -- here,
+its own `P_i` -- after seeing them. This changes the transcript of the
+membership proof of Section 4.1 too, which uses the same function.
+
+### 10.2 The proof of decryption
+
+At key generation each trustee's share `dk_j` is committed to and published as
+`[[dk_j]]`. For the `i`-th ciphertext `c_i`, trustee `j` publishes
+`ds_ij = dk_j c_i + p E_ij` with `||E_ij||_inf <= B = B_Drown = 2^55`, a
+commitment `Y_ij = [[E_ij]]`, a linear proof per ciphertext, and one `\Pi_Bnd`
+over all its `Y_ij`, as in Figure 6.
+
+**The linear proof** (`dlin_prove` in `src/ntru_voting.cpp`) shows that the
+openings of `[[dk_j]]` and `Y_ij` satisfy `c_i s + p E = ds_ij`, which is the
+paper's `[[E_ij - p^-1 ds_ij]] = -p^-1 c_i [[dk_j]]` without the inverse. It is
+the linear proof of the proof of shuffle with two openings instead of three:
+the same `NTRU_SIGMA_C`, the same rejection sampling over all the openings at
+once, and `LIN_REPS` repetitions against challenges from one hash, so it
+inherits Section 6's zero-divisor hypothesis. Its hash binds the key, both
+commitments, `c_i`, `ds_ij` and the indices `i` and `j`.
+
+**`\Pi_Bnd` departs from the paper's decomposition.** The paper writes each
+coefficient of `E_ij` in `zeta + 1` digits in `{0, 1, 2}`, weights `3^k`, with
+`zeta = ceil(log_3 B_Drown) - 1`, and proves the digits in that set with
+`\Pi_Small`. At `B = 2^55` that is 35 digits, and their sums reach only
+`3^35 - 1`, about `2^55.5`: they cannot express the noise as sampled, whose
+coefficients range over `[-B, B]`, `2^56 + 1` values. Taking one more plain
+digit fixes the coverage but proves `||E||_inf <= (3^36 - 1) / 2`, about
+`2^56.1`, twice `B`, and `B_Dec + p xi_2 B_Drown <= q/2` holds here with no
+room for a factor of two (`include/common.h`). So each coefficient `x` of
+`E_ij + B`, which lies in `[0, 2B]`, is written against the weights
+
+```
+w_k = 3^k  for k < 35,       w_35 = (2B - 3^35 + 1) / 2,
+```
+
+whose sums `sum_k w_k d_k`, `d_k in {0, 1, 2}`, are exactly `[0, 2B]`: the first
+35 digits reach every value up to `3^35 - 1`, the last adds multiples of a
+weight no larger than that, and the top value is `3^35 - 1 + 2 w_35 = 2B`
+(`2B` even and `3^35` odd, so `w_35` is an integer). With `d'_k = d_k - 1`
+ternary and `C = sum_k w_k - B`,
+
+```
+row 0    Y_i.c1        = r_0 + sum_j A1[0][j] r_{j+1}
+row 1    Y_i.c2[0] - C = sum_j A2[0][j] r_j + sum_k w_k D'_{i,k}
+```
+
+with `D'_{i,k}` the ring element of the `k`-th digits: `R = 2` rows and
+`V = WIDTH + 36` components, all ternary, `\Pi_Small` built with `-DPISMALL_DEC`
+(`pismall_dec_prove`). The extractor gets `||E_ij||_inf <= B` exactly, which is
+the bound the correctness condition is written with. The proof also bounds the
+commitment randomness, which the paper's relation asks for too. Shifting the
+digits to `{-1, 0, 1}` rather than adding a coefficient set `{0, 1, 2}` keeps
+the existing, tested identity; the two are the same statement.
+
+The test "a trustee whose noise is out of bounds is rejected" gives one
+coefficient of `E_ij` the value `B + 1`, with a share consistent with it, so
+that the linear proof holds and only `\Pi_Bnd` can fail; since the proof is
+exact, one past the bound is enough. The prover has no digits for that
+coefficient and the verifier rejects.
+
+### 10.3 What is still not covered
+
+- **Key generation is still a dealer** (Section 3.1 of the paper assumes as
+  much): `[[dk_j]]` is committed to by the party that made the shares, and
+  nothing proves that the `dk_j` sum to the key behind `h`.
+- **Nothing is serialised.** Prover and verifier run in one process, as the
+  proof of shuffle does. The sizes `ntru_voting` prints are the encoders'
+  lengths: commitments and shares uniform, the linear proofs' responses
+  Gaussian-coded, the two `\Pi_Small` by the formula of `pismall_lib_bytes`.
+- **No hash takes an election identifier**, and the proofs of re-encryption
+  are not bound to the mix server's index beyond the statement they prove.
+- **Not run at `MSGS = 1000` here**, for the reason Section 9 gives; the
+  election has been run at `MSGS = 8`, every check passing.

@@ -192,7 +192,11 @@ void ntru_decrypt(params::poly_p &m, params::poly_q &c, params::poly_q &sk) {
     }
 }
 
-void ntru_distdec(params::poly_q &dsj, params::poly_q &ci, params::poly_q &dkj) {
+/* As ntru_distdec, and also return the drowning noise E_ij, in the
+ * coefficient domain, which the trustee's proof of correct decryption commits
+ * to: ds_ij = dk_j c_i + p E_ij with ||E_ij||_inf <= B_Drown. */
+void ntru_distdec_noise(params::poly_q &dsj, params::poly_q &Ej_out,
+		params::poly_q &ci, params::poly_q &dkj) {
     std::array <mpz_t, NTRU_DEGREE> coeffs;
     params::poly_q dsij, Ej;
     mpz_t qDivBy2, bound, span;
@@ -221,6 +225,7 @@ void ntru_distdec(params::poly_q &dsj, params::poly_q &ci, params::poly_q &dkj) 
         mpz_sub(coeffs[i], coeffs[i], bound);
     }
     Ej.mpz2poly(coeffs);
+    Ej_out = Ej;
     Ej.ntt_pow_phi();
     dsij = dkj * ci;
     dsj = dsij;
@@ -234,6 +239,12 @@ void ntru_distdec(params::poly_q &dsj, params::poly_q &ci, params::poly_q &dkj) 
     for (size_t i = 0; i < params::poly_q::degree; i++) {
         mpz_clear(coeffs[i]);
     }
+}
+
+void ntru_distdec(params::poly_q &dsj, params::poly_q &ci, params::poly_q &dkj) {
+    params::poly_q Ej;
+
+    ntru_distdec_noise(dsj, Ej, ci, dkj);
 }
 
 void ntru_comb(params::poly_p &m, params::poly_q c, params::poly_q dsj[], size_t shares) {

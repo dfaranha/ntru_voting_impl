@@ -61,4 +61,43 @@ size_t pismall_const_bytes(const pismall_const_t * pi);
 void pismall_const_free(pismall_const_t * pi);
 void pismall_const_clear(void);
 
+/**
+ * The same proof at the mix servers' relation, from a second build of
+ * src/ntru_pismall.cpp (PISMALL_MIX): each of the n commitments P[i] opens,
+ * under ternary randomness r[i], to an encryption of zero p (h s'_i + e'_i)
+ * under the public key h, with s'_i and e'_i ternary -- Pi_SMALL on the matrix
+ * A_M of Figure 5 of the paper. It is what ties a mix server's re-encryptions
+ * to its input list: the verifier adds each input c_i into P[i] itself, which
+ * gives the commitment to c_i + c'_i that the proof of shuffle is about.
+ * es and ee are s'_i and e'_i in the coefficient domain, r[i] in the NTT
+ * domain; n is at most the compile-time TAU of that build.
+ */
+typedef struct pismall_mix pismall_mix_t;
+
+pismall_mix_t *pismall_mix_prove(comkey_t & key, params::poly_q & pk,
+		commit_t * P, std::vector < params::poly_q > *r, params::poly_q * es,
+		params::poly_q * ee, size_t n);
+int pismall_mix_verify(pismall_mix_t * pi, comkey_t & key, params::poly_q & pk,
+		commit_t * P, size_t n);
+size_t pismall_mix_bytes(const pismall_mix_t * pi);
+void pismall_mix_free(pismall_mix_t * pi);
+void pismall_mix_clear(void);
+
+/**
+ * And at the trustees' relation, from a third build (PISMALL_DEC): Pi_Bnd of
+ * the paper, the exact proof that each of the n commitments Y[i] to drowning
+ * noise opens, under ternary randomness r[i], to an E_i with
+ * ||E_i||_inf <= B_Drown (NTRU_BOUND_D). E holds the E_i in the coefficient
+ * domain.
+ */
+typedef struct pismall_dec pismall_dec_t;
+
+pismall_dec_t *pismall_dec_prove(comkey_t & key, commit_t * Y,
+		std::vector < params::poly_q > *r, params::poly_q * E, size_t n);
+int pismall_dec_verify(pismall_dec_t * pi, comkey_t & key, commit_t * Y,
+		size_t n);
+size_t pismall_dec_bytes(const pismall_dec_t * pi);
+void pismall_dec_free(pismall_dec_t * pi);
+void pismall_dec_clear(void);
+
 #endif

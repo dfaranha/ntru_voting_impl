@@ -124,6 +124,18 @@ ntru: src/ntru.cpp $(OBJ)/sample_z_small.o $(COMMON) $(BLAKE3) $(STAMP)
 $(OBJ)/pismall-const.o: src/ntru_pismall.cpp $(STAMP) | $(OBJ)
 	$(CPP) $(CFLAGS) -UTAU -DTAU='AEX_PAD2(MSGS)' -c $< -o $@
 
+# pismall again, at the mix servers' relation (two rows, WIDTH + 2 components):
+# the proof that each re-encryption adds an encryption of zero.
+$(OBJ)/pismall-mix.o: src/ntru_pismall.cpp $(STAMP) | $(OBJ)
+	$(CPP) $(CFLAGS) -UTAU -DTAU='AEX_PAD2(MSGS)' -DPISMALL_MIX \
+		-DPISMALL_V='(WIDTH+2)' -c $< -o $@
+
+# and at the trustees' (two rows, WIDTH + 36 components, the base-3 digits of
+# the drowning noise): the exact bound Pi_Bnd on it.
+$(OBJ)/pismall-dec.o: src/ntru_pismall.cpp $(STAMP) | $(OBJ)
+	$(CPP) $(CFLAGS) -UTAU -DTAU='AEX_PAD2(MSGS)' -DPISMALL_DEC \
+		-DPISMALL_V='(WIDTH+36)' -c $< -o $@
+
 ntru_pismall: src/ntru_pismall.cpp $(OBJ)/ntru_bdlop.o $(COMMON) $(BLAKE3) \
 		$(STAMP)
 	$(CPP) $(CFLAGS) -DMAIN src/ntru_pismall.cpp \
@@ -140,11 +152,13 @@ ntru_shuffle: src/ntru_shuffle.cpp $(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o \
 # src/ntru_shuffle.cpp, without MAIN, for the proof of shuffle, so it links what
 # ntru_shuffle links plus the distributed NTRU of src/ntru.cpp.
 ntru_voting: src/ntru_voting.cpp src/ntru_shuffle.cpp $(OBJ)/ntru.o \
-		$(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o \
+		$(OBJ)/ntru_bdlop.o $(OBJ)/pismall-const.o $(OBJ)/pismall-mix.o \
+		$(OBJ)/pismall-dec.o $(OBJ)/pibnd-short.o \
 		$(OBJ)/sample_z_small.o $(OBJ)/sample_z_large.o $(OBJ)/ntru_ballot.o \
 		$(COMMON) $(BLAKE3) $(STAMP)
 	$(CPP) $(CFLAGS) src/ntru_voting.cpp $(OBJ)/ntru.o $(OBJ)/ntru_bdlop.o \
-		$(OBJ)/pismall-const.o $(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
+		$(OBJ)/pismall-const.o $(OBJ)/pismall-mix.o $(OBJ)/pismall-dec.o \
+		$(OBJ)/pibnd-short.o $(OBJ)/sample_z_small.o \
 		$(OBJ)/sample_z_large.o $(OBJ)/ntru_ballot.o $(COMMON) $(BLAKE3) -o $@ \
 		$(LIBS) $(LAZER_LIBS) $(FLINT)
 

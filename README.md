@@ -22,19 +22,40 @@ $ make CONFIG="-DMSGS=4 -DTAU=8 -DBENCH=1"
 The binaries respectively implement the BDLOP commitment scheme, the distributed NTRU cryptosystem, the exact proof of smallness, the amortized norm proof and the shuffle itself. The last two are the membership sub-proofs of Lemma 5 of [ePrint 2025/658](https://eprint.iacr.org/2025/658): the shuffle proves a permutation by a product over pairs `(m_i, g(i))`, and the elements `sigma_i` it pairs the output with are committed, proved to be ring constants by `ntru_pismall` and proved short by `ntru_pibnd`. Without them the product identity is satisfied by a list that is permuted differently in each of the `d` fields the ring splits into, which is not a permutation at all; `ntru_shuffle` carries tests that exhibit that attack and its rejection. Tests and benchmarks are included for each of them, such that they can be used independently. The proofs keep many ring elements on the stack (a `params::poly_q` is 16 KiB and a `params::poly_big` 64 KiB), so we recommend to adjust the stack size with `ulimit -s unlimited` to avoid crashing in the largest benchmarks.
 
 `ntru_voting` puts them together, with `MSGS` voters, 4 mix servers and 4
-trustees: the trustees share an NTRU key; each voter encrypts a vote for one of 8
-candidates and proves the ballot well formed, which the board checks (below);
-each mix server in turn re-encrypts every ciphertext with a fresh
-encryption of zero, commits to that encryption of zero and adds the input into
-the commitment, which makes it a commitment to the re-encryption, and publishes
-the re-encryptions permuted with a proof of shuffle over those commitments; and
-the trustees' partial decryptions of the last list are combined and tallied. It
-also checks that a ballot proof moved to another voter or kept for a changed
-ciphertext is rejected, that a ballot for two candidates cannot be proven, and
-that a mix server that changes an output, or replaces a ballot with one of its
-own, is rejected. What this branch does not implement is not in it: the proof
-that each re-encryption adds an encryption of zero with short randomness, and
-the trustees' proofs of correct decryption.
+trustees, and runs every proof of the paper's protocol (Figures 5 and 6):
+
+- the trustees share an NTRU key, and each share `dk_j` is committed to and
+  published as `[[dk_j]]`;
+- each voter encrypts a vote for one of 8 candidates and proves the ballot well
+  formed, which the board checks (below);
+- each mix server in turn re-encrypts every ciphertext with a fresh encryption
+  of zero `c'_i = p (h s'_i + e'_i)`, publishes a commitment to each `c'_i` and
+  proves, with one amortized `\Pi_Small` over all of them on the matrix `A_M`,
+  that each opens to such an encryption with ternary `s'_i, e'_i`
+  (`pismall_mix_*` in `include/pismall.h`). The verifier adds each input into
+  the commitment to its `c'_i` itself, which gives the commitments to the
+  re-encryptions, and the server publishes the re-encryptions permuted with a
+  proof of shuffle over those;
+- each trustee publishes its partial decryption `ds_ij = dk_j c_i + p E_ij` of
+  every ciphertext of the last list, a commitment to each drowning noise
+  `E_ij`, a linear proof per ciphertext that the openings of `[[dk_j]]` and
+  `[[E_ij]]` satisfy that equation, and one exact `\Pi_Bnd` that every
+  `||E_ij||_inf <= B_Drown` (`pismall_dec_*`). The shares are combined and
+  tallied once every proof has been checked.
+
+It also checks that a ballot proof moved to another voter or kept for a changed
+ciphertext is rejected, that a ballot for two candidates cannot be proven, that
+a mix server that changes an output, replaces a ballot with one of its own, or
+commits to something other than an encryption of zero is rejected, and that a
+trustee whose partial decryption is wrong, or whose noise is one past
+`B_Drown`, is rejected. It prints the time and size of each proof: per ballot
+for the voters, per ballot and mix server for the proofs of re-encryption and of
+shuffle, and per ballot and trustee for the shares and the proofs of
+decryption. Section 10 of `SOUNDNESS.md` describes the proofs of re-encryption
+and of decryption, including where `\Pi_Bnd` departs from the paper's digit
+decomposition, which does not cover the noise as sampled. `ntru_pismall.cpp` is
+built three times into `ntru_voting`, once per relation, as the `Makefile`
+explains.
 
 The ballot proof (`src/ntru_ballot.c`) shows, with LaZer's linear proofs, that
 c = 2hs + 2e + m with s, e ternary and short and m = X^j or 0: one vote or

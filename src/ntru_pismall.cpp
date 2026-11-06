@@ -15,6 +15,23 @@
 #include <assert.h>
 #include "blake3.h"
 
+/* This file is compiled three times into the mix-net: at the shape of a BDLOP
+ * commitment equation, for the proof of shuffle's membership sub-proof; with
+ * PISMALL_MIX at the mix servers' relation, for the proof that each
+ * re-encryption adds an encryption of zero; and with PISMALL_DEC at the
+ * trustees' relation, for the exact bound on their drowning noise. Most types
+ * below are sized by R and V, so the second and third builds keep them in a
+ * namespace of their own; otherwise two layouts would share one name, which
+ * link-time optimization is entitled to assume cannot happen. */
+#if defined(PISMALL_MIX)
+#define PISMALL_NS  pismall_mix_impl
+#elif defined(PISMALL_DEC)
+#define PISMALL_NS  pismall_dec_impl
+#endif
+#ifdef PISMALL_NS
+namespace PISMALL_NS {
+#endif
+
 /* Columns opened. Lemma 2 of the paper bounds the proximity part of the
  * soundness error by 2 max((g / (l - ETA))^ETA, (1 - 2 (g - g') / 3l)^ETA) over
  * g' <= g <= l, with g' = 2N + ETA the message length and l = AEX_COLS the code
@@ -1225,6 +1242,7 @@ static void aex_extract(aex_u64 a, const aex_u64 * b, aex_u64 out[3][TAU],
 }
 
 
+#ifndef PISMALL_NS
 /* Build the rows of the relation proving that the message committed in each
  * P_i is a ring constant. It is the commitment equation itself, so the witness
  * the proof binds is an opening of P_i and no link between two commitment
@@ -1297,6 +1315,8 @@ static void aex_scalar_wit(const vector < params::poly_q > *r,
 	}
 }
 
+#endif
+
 #define POLY_BYTES (params::poly_q::nmoduli * params::poly_q::degree * \
                     sizeof(params::poly_q::value_type))
 
@@ -1315,6 +1335,22 @@ static void pismall_hash(gr_t & x, gr_t & beta0, gr_t beta[TAU][3], fmpz_t q,
 	for (size_t i = 0; i < com.c2.size(); i++) {
 		blake3_hasher_update(&hasher, (const uint8_t *)com.c2[i].data(),
 				POLY_BYTES);
+	}
+	/* The statement, A and every t_i. Without it the challenges do not depend
+	 * on what is being proven, and a prover could pick the relation after
+	 * seeing them; that matters most for the mix-net's relations, whose t_i
+	 * are commitments the prover itself publishes. */
+	for (int i = 0; i < R; i++) {
+		for (int j = 0; j < V; j++) {
+			blake3_hasher_update(&hasher, (const uint8_t *)A[i][j].data(),
+					POLY_BYTES);
+		}
+	}
+	for (size_t i = 0; i < TAU; i++) {
+		for (int j = 0; j < R; j++) {
+			blake3_hasher_update(&hasher, (const uint8_t *)t[i][j].data(),
+					POLY_BYTES);
+		}
 	}
 
 	blake3_hasher_finalize(&hasher, hash, BLAKE3_OUT_LEN);
@@ -1970,9 +2006,28 @@ struct pismall_pass {
 	aex_open_t o;
 };
 
+/* The proof a build publishes. The type is named in pismall.h, so it lives
+ * outside the namespace; its passes are this build's own. */
+#if defined(PISMALL_MIX)
+}
+struct pismall_mix {
+	pismall_mix_impl::pismall_pass pass[AEX_REPS];
+};
+namespace pismall_mix_impl {
+typedef pismall_mix_t pismall_proof_t;
+#elif defined(PISMALL_DEC)
+}
+struct pismall_dec {
+	pismall_dec_impl::pismall_pass pass[AEX_REPS];
+};
+namespace pismall_dec_impl {
+typedef pismall_dec_t pismall_proof_t;
+#else
 struct pismall_const {
 	pismall_pass pass[AEX_REPS];
 };
+typedef pismall_const_t pismall_proof_t;
+#endif
 
 /* Initialise a generator for the prover's masking witness. s_0, the witness
  * that masks the real one in the published f, comes out of this, and
@@ -1998,7 +2053,7 @@ static fmpz_mod_ctx_t mono_ctx;
 static fmpz_t mono_q, mono_a[TAU];
 static fmpz_mod_poly_t mono_lag[TAU + 1];
 
-static void pismall_const_init(void) {
+static void pismall_lib_init(void) {
 	fmpz_t w;
 
 	if (mono_ready) {
@@ -2024,7 +2079,7 @@ static void pismall_const_init(void) {
 	mono_ready = 1;
 }
 
-void pismall_const_clear(void) {
+static void pismall_lib_clear(void) {
 	if (!mono_ready) {
 		return;
 	}
@@ -2042,16 +2097,10 @@ void pismall_const_clear(void) {
 	mono_ready = 0;
 }
 
-pismall_const_t *pismall_const_prove(comkey_t & key, commit_t * P,
-		vector < params::poly_q > *r, params::poly_q * sigma, size_t n) {
-	pismall_const_t *pi = new pismall_const_t;
+/* Prove the relation the caller has loaded into A, t and s. */
+static pismall_proof_t *pismall_lib_prove(comkey_t & key) {
+	pismall_proof_t *pi = new pismall_proof_t;
 	gr_t x;
-
-	assert(n >= 1 && n <= TAU);
-	pismall_const_init();
-	aex_scalar_matrix(key);
-	aex_scalar_stmt(P, n);
-	aex_scalar_wit(r, sigma, n);
 
 	gr_init(x);
 	for (int rep = 0; rep < AEX_REPS; rep++) {
@@ -2078,16 +2127,10 @@ pismall_const_t *pismall_const_prove(comkey_t & key, commit_t * P,
 	return pi;
 }
 
-int pismall_const_verify(pismall_const_t * pi, comkey_t & key, commit_t * P,
-		size_t n) {
-	if (pi == NULL || n < 1 || n > TAU) {
-		return 0;
-	}
-	pismall_const_init();
-	aex_scalar_matrix(key);
-	aex_scalar_stmt(P, n);
-
+/* Verify against the relation the caller has loaded into A and t. */
+static int pismall_lib_verify(pismall_proof_t * pi, comkey_t & key) {
 	int result = 1;
+
 	for (int rep = 0; rep < AEX_REPS; rep++) {
 		pismall_pass & ps = pi->pass[rep];
 
@@ -2098,7 +2141,7 @@ int pismall_const_verify(pismall_const_t * pi, comkey_t & key, commit_t * P,
 	return result;
 }
 
-size_t pismall_const_bytes(const pismall_const_t * pi) {
+static size_t pismall_lib_bytes(const pismall_proof_t * pi) {
 	size_t n = 0;
 
 	if (pi == NULL) {
@@ -2124,7 +2167,7 @@ size_t pismall_const_bytes(const pismall_const_t * pi) {
 	return n;
 }
 
-void pismall_const_free(pismall_const_t * pi) {
+static void pismall_lib_free(pismall_proof_t * pi) {
 	if (pi == NULL) {
 		return;
 	}
@@ -2146,6 +2189,324 @@ void pismall_const_free(pismall_const_t * pi) {
 	}
 	delete pi;
 }
+
+/* The first two rows of every relation below are a BDLOP commitment equation,
+ * c1 = r_0 + A1 r and c2[0] = A2[0] r + message, with the message spelled out
+ * in the components past the WIDTH of r. */
+#ifdef PISMALL_NS
+static void aex_commit_rows(comkey_t & key) {
+	params::poly_q one = 1;
+
+	one.ntt_pow_phi();
+	for (int i = 0; i < R; i++) {
+		for (int j = 0; j < V; j++) {
+			A[i][j] = 0;
+		}
+	}
+	A[0][0] = one;
+	for (int j = 0; j < WIDTH - HEIGHT; j++) {
+		A[0][j + HEIGHT] = key.A1[0][j];
+	}
+	for (int j = 0; j < WIDTH; j++) {
+		A[1][j] = key.A2[0][j];
+	}
+	for (int j = 0; j < V; j++) {
+		aex_sets[j] = AEX_TER;
+	}
+}
+#endif
+
+#if defined(PISMALL_MIX)
+/* --- The mix servers' proof of re-encryption -----------------------------
+ *
+ * Each mix server commits to the encryption of zero c'_i = p (h s'_i + e'_i)
+ * it adds to the i-th input, and proves that every one of those commitments
+ * opens to such an encryption with ternary s'_i, e'_i and ternary commitment
+ * randomness r_i:
+ *
+ *   row 0    P_i.c1    = r_0 + sum_j A1[0][j] r_{j+HEIGHT}
+ *   row 1    P_i.c2[0] = sum_j A2[0][j] r_j + p h s'_i + p e'_i
+ *
+ * R = HEIGHT + 1 rows and V = WIDTH + 2 components, all ternary: the relation
+ * A_M s = com' of Figure 5 of the paper, Pi_SMALL on the matrix A_M. An NTRU
+ * ciphertext is one ring element, so the relation keeps the two rows of a
+ * commitment equation and needs no more message rows than the key has.
+ */
+static_assert(R == HEIGHT + 1 && V == WIDTH + 2,
+		"the mix servers' relation has two rows and WIDTH + 2 components");
+
+static void aex_mix_matrix(comkey_t & key, params::poly_q & pk) {
+	params::poly_q p = NTRU_PRIMEP;
+
+	p.ntt_pow_phi();
+	aex_commit_rows(key);
+	A[1][WIDTH] = p * pk;
+	A[1][WIDTH + 1] = p;
+}
+
+/* The public part, the commitments themselves; spare relations, up to the
+ * power of two TAU, repeat the first. */
+static void aex_mix_stmt(const commit_t * P, size_t n) {
+	for (size_t i = 0; i < TAU; i++) {
+		const commit_t & c = P[i < n ? i : 0];
+
+		t[i][0] = c.c1;
+		t[i][1] = c.c2[0];
+	}
+}
+
+/* The witness: the commitment randomness, in the NTT domain as
+ * bdlop_sample_rand leaves it, and s', e' in the coefficient domain as
+ * ntru_encrypt_rand returns them. */
+static void aex_mix_wit(const vector < params::poly_q > *r,
+		const params::poly_q * es, const params::poly_q * ee, size_t n) {
+	for (size_t i = 0; i < TAU; i++) {
+		size_t k = (i < n ? i : 0);
+
+		for (int j = 0; j < WIDTH; j++) {
+			s[i][j] = r[k][j];
+		}
+		s[i][WIDTH] = es[k];
+		s[i][WIDTH].ntt_pow_phi();
+		s[i][WIDTH + 1] = ee[k];
+		s[i][WIDTH + 1].ntt_pow_phi();
+	}
+}
+}
+
+pismall_mix_t *pismall_mix_prove(comkey_t & key, params::poly_q & pk,
+		commit_t * P, vector < params::poly_q > *r, params::poly_q * es,
+		params::poly_q * ee, size_t n) {
+	using namespace pismall_mix_impl;
+
+	assert(n >= 1 && n <= TAU);
+	pismall_lib_init();
+	aex_mix_matrix(key, pk);
+	aex_mix_stmt(P, n);
+	aex_mix_wit(r, es, ee, n);
+	return pismall_lib_prove(key);
+}
+
+int pismall_mix_verify(pismall_mix_t * pi, comkey_t & key, params::poly_q & pk,
+		commit_t * P, size_t n) {
+	using namespace pismall_mix_impl;
+
+	if (pi == NULL || n < 1 || n > TAU) {
+		return 0;
+	}
+	pismall_lib_init();
+	aex_mix_matrix(key, pk);
+	aex_mix_stmt(P, n);
+	return pismall_lib_verify(pi, key);
+}
+
+size_t pismall_mix_bytes(const pismall_mix_t * pi) {
+	return pismall_mix_impl::pismall_lib_bytes(pi);
+}
+
+void pismall_mix_free(pismall_mix_t * pi) {
+	pismall_mix_impl::pismall_lib_free(pi);
+}
+
+void pismall_mix_clear(void) {
+	pismall_mix_impl::pismall_lib_clear();
+}
+#elif defined(PISMALL_DEC)
+/* --- The trustees' exact bound on their drowning noise -------------------
+ *
+ * Pi_Bnd of the paper: each trustee commits to the noise E_i of its partial
+ * decryption of the i-th ciphertext, E_i drawn with ||E_i||_inf <= B = B_Drown,
+ * and proves that every commitment opens to a message that bounded, under
+ * ternary randomness. The bound is made a ternary statement by writing each
+ * coefficient x of E_i + B, which lies in [0, 2B], in digits d_k in {0, 1, 2}
+ * against the weights
+ *
+ *   w_k = 3^k for k < ND - 1,    w_{ND-1} = (2B - 3^(ND-1) + 1) / 2,
+ *
+ * whose sums sum_k w_k d_k cover exactly [0, 2B]: the first ND - 1 digits
+ * reach every value up to 3^(ND-1) - 1, the last adds multiples of a weight no
+ * larger than that, and its top value is 3^(ND-1) - 1 + 2 w_{ND-1} = 2B. (2B
+ * is even and 3^(ND-1) odd, so the weight is an integer and the range is
+ * exact.) The paper takes ND = ceil(log_3 B) digits of plain powers of three,
+ * which at B = 2^55 is 35 and reaches only 3^35 - 1 < 2B, so it does not cover
+ * the noise as sampled; the ND here is the smallest with 3^ND - 1 >= 2B. With
+ * d'_k = d_k - 1 ternary and C = sum_k w_k - B,
+ *
+ *   row 0    Y_i.c1        = r_0 + sum_j A1[0][j] r_{j+HEIGHT}
+ *   row 1    Y_i.c2[0] - C = sum_j A2[0][j] r_j + sum_k w_k D'_{i,k}
+ *
+ * with D'_{i,k} the ring element of the k-th digits: R = HEIGHT + 1 rows and
+ * V = WIDTH + ND components, all ternary. Exact, so ||E_i||_inf <= B is what
+ * the extractor gets, which is what B_Dec + p xi_2 B_Drown <= q/2 needs.
+ */
+#define PISMALL_B   36028797018963968ULL        /* NTRU_BOUND_D, 2^55 */
+#define PISMALL_ND  36
+static_assert(R == HEIGHT + 1 && V == WIDTH + PISMALL_ND,
+		"the trustees' relation has two rows and WIDTH + ND components");
+
+/* 3^k, and the weights above. */
+static constexpr uint64_t pow3(int k) {
+	return k == 0 ? 1 : 3 * pow3(k - 1);
+}
+static_assert(pow3(PISMALL_ND - 1) - 1 < 2 * PISMALL_B
+		&& 2 * PISMALL_B <= pow3(PISMALL_ND) - 1,
+		"ND is the smallest digit count covering [0, 2B]");
+static constexpr uint64_t W_LAST = (2 * PISMALL_B - pow3(PISMALL_ND - 1) + 1) / 2;
+static_assert(W_LAST <= pow3(PISMALL_ND - 1)
+		&& pow3(PISMALL_ND - 1) - 1 + 2 * W_LAST == 2 * PISMALL_B,
+		"the last weight closes the range at exactly 2B");
+
+static uint64_t aex_weight(int k) {
+	return k < PISMALL_ND - 1 ? pow3(k) : W_LAST;
+}
+
+/* A ring constant c, as a polynomial in the NTT domain. */
+static params::poly_q aex_const(uint64_t c) {
+	int64_t cf[params::poly_q::degree] = { };
+	params::poly_q a;
+
+	cf[0] = (int64_t) c;
+	util::set_signed(a, cf);
+	a.ntt_pow_phi();
+	return a;
+}
+
+static void aex_dec_matrix(comkey_t & key) {
+	aex_commit_rows(key);
+	for (int k = 0; k < PISMALL_ND; k++) {
+		A[1][WIDTH + k] = aex_const(aex_weight(k));
+	}
+}
+
+/* The public part: Y_i, its second row less the constant C. */
+static void aex_dec_stmt(const commit_t * Y, size_t n) {
+	uint64_t c = 0;
+	params::poly_q C;
+
+	for (int k = 0; k < PISMALL_ND; k++) {
+		c += aex_weight(k);
+	}
+	C = aex_const(c - PISMALL_B);
+	for (size_t i = 0; i < TAU; i++) {
+		const commit_t & y = Y[i < n ? i : 0];
+
+		t[i][0] = y.c1;
+		t[i][1] = y.c2[0] - C;
+	}
+}
+
+/* The witness: the commitment randomness, in the NTT domain, and the digits of
+ * E_i + B, from E_i in the coefficient domain. A coefficient outside [-B, B]
+ * has no digits; it is left as all zeros, which the proof then rejects. */
+static void aex_dec_wit(const vector < params::poly_q > *r,
+		const params::poly_q * E, size_t n) {
+	static int64_t cf[params::poly_q::degree], dg[PISMALL_ND][params::poly_q::degree];
+	const uint64_t low = pow3(PISMALL_ND - 1) - 1;
+
+	for (size_t i = 0; i < TAU; i++) {
+		size_t k = (i < n ? i : 0);
+
+		for (int j = 0; j < WIDTH; j++) {
+			s[i][j] = r[k][j];
+		}
+		util::centred(cf, E[k]);
+		for (size_t l = 0; l < params::poly_q::degree; l++) {
+			int64_t x = cf[l] + (int64_t) PISMALL_B;
+			uint64_t rem, top;
+
+			if (x < 0 || x > (int64_t) (2 * PISMALL_B)) {
+				for (int d = 0; d < PISMALL_ND; d++) {
+					dg[d][l] = 0;
+				}
+				continue;
+			}
+			top = ((uint64_t) x > low) ?
+					((uint64_t) x - low + W_LAST - 1) / W_LAST : 0;
+			rem = (uint64_t) x - top * W_LAST;
+			for (int d = 0; d < PISMALL_ND - 1; d++) {
+				dg[d][l] = (int64_t) (rem % 3) - 1;
+				rem /= 3;
+			}
+			dg[PISMALL_ND - 1][l] = (int64_t) top - 1;
+		}
+		for (int d = 0; d < PISMALL_ND; d++) {
+			util::set_signed(s[i][WIDTH + d], dg[d]);
+			s[i][WIDTH + d].ntt_pow_phi();
+		}
+	}
+}
+}
+
+pismall_dec_t *pismall_dec_prove(comkey_t & key, commit_t * Y,
+		vector < params::poly_q > *r, params::poly_q * E, size_t n) {
+	using namespace pismall_dec_impl;
+
+	assert(n >= 1 && n <= TAU);
+	pismall_lib_init();
+	aex_dec_matrix(key);
+	aex_dec_stmt(Y, n);
+	aex_dec_wit(r, E, n);
+	return pismall_lib_prove(key);
+}
+
+int pismall_dec_verify(pismall_dec_t * pi, comkey_t & key, commit_t * Y,
+		size_t n) {
+	using namespace pismall_dec_impl;
+
+	if (pi == NULL || n < 1 || n > TAU) {
+		return 0;
+	}
+	pismall_lib_init();
+	aex_dec_matrix(key);
+	aex_dec_stmt(Y, n);
+	return pismall_lib_verify(pi, key);
+}
+
+size_t pismall_dec_bytes(const pismall_dec_t * pi) {
+	return pismall_dec_impl::pismall_lib_bytes(pi);
+}
+
+void pismall_dec_free(pismall_dec_t * pi) {
+	pismall_dec_impl::pismall_lib_free(pi);
+}
+
+void pismall_dec_clear(void) {
+	pismall_dec_impl::pismall_lib_clear();
+}
+#else
+void pismall_const_clear(void) {
+	pismall_lib_clear();
+}
+
+pismall_const_t *pismall_const_prove(comkey_t & key, commit_t * P,
+		vector < params::poly_q > *r, params::poly_q * sigma, size_t n) {
+	assert(n >= 1 && n <= TAU);
+	pismall_lib_init();
+	aex_scalar_matrix(key);
+	aex_scalar_stmt(P, n);
+	aex_scalar_wit(r, sigma, n);
+	return pismall_lib_prove(key);
+}
+
+int pismall_const_verify(pismall_const_t * pi, comkey_t & key, commit_t * P,
+		size_t n) {
+	if (pi == NULL || n < 1 || n > TAU) {
+		return 0;
+	}
+	pismall_lib_init();
+	aex_scalar_matrix(key);
+	aex_scalar_stmt(P, n);
+	return pismall_lib_verify(pi, key);
+}
+
+size_t pismall_const_bytes(const pismall_const_t * pi) {
+	return pismall_lib_bytes(pi);
+}
+
+void pismall_const_free(pismall_const_t * pi) {
+	pismall_lib_free(pi);
+}
+#endif
 
 #ifdef MAIN
 /* Commit to TAU ring constants sigma_i = i, or, when scalar is false, to
