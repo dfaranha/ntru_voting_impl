@@ -45,34 +45,34 @@ trustees, and runs every proof of the paper's protocol (Figures 5 and 6):
 
 It also checks that a ballot proof moved to another voter or kept for a changed
 ciphertext is rejected, that a ballot for two candidates cannot be proven, that
-a mix server that changes an output, replaces a ballot with one of its own, or
-commits to something other than an encryption of zero is rejected, and that a
-trustee whose partial decryption is wrong, or whose noise is one past
-`B_Drown`, is rejected. It prints the time and size of each proof: per ballot
-for the voters, per ballot and mix server for the proofs of re-encryption and of
-shuffle, and per ballot and trustee for the shares and the proofs of
-decryption. Section 10 of `SOUNDNESS.md` describes the proofs of re-encryption
-and of decryption, including where `\Pi_Bnd` departs from the paper's digit
-decomposition, which does not cover the noise as sampled. `ntru_pismall.cpp` is
-built three times into `ntru_voting`, once per relation, as the `Makefile`
-explains.
+a ballot for a candidate past the last is rejected, that a mix server that
+changes an output, replaces a ballot with one of its own, or commits to
+something other than an encryption of zero is rejected, and that a trustee whose
+partial decryption is wrong, or whose noise is one past `B_Drown`, is rejected.
+It prints the time and size of each proof: per ballot for the voters, per ballot
+and mix server for the proofs of re-encryption and of shuffle, and per ballot
+and trustee for the shares and the proofs of decryption. Section 10 of
+`SOUNDNESS.md` describes the proofs of re-encryption and of decryption,
+including where `\Pi_Bnd` departs from the paper's digit decomposition, which
+does not cover the noise as sampled. `ntru_pismall.cpp` is built three times
+into `ntru_voting`, once per relation, as the `Makefile` explains.
 
 The ballot proof (`src/ntru_ballot.c`) shows, with LaZer's linear proofs, that
-c = 2hs + 2e + m with s, e ternary and short and m = X^j or 0: one vote or
-none. It proves m binary and equal to a u with ||u|| <= 1, which leaves only
-those. It is bound to the election and the voter, so it cannot be copied to
-another voter's ballot. LaZer lifts the statement to its ring of degree 64 and
-an 84-bit proof modulus; `lazer/ntru_ballot.py` describes it, and
-`lazer/ntru_ballot.h` is generated from it, from `third_party/lazer/scripts`,
-with `sage lin-codegen.sage ../../../lazer/ntru_ballot.py >
-../../../lazer/ntru_ballot.h`. LaZer's default target, a root Hermite factor
-of 1.0044, is about 102 bits under the lattice-estimator here, so the file asks
-for 1.0036: MLWE 136.1 and MSIS 141.3 bits, knowledge error 2^-127. The proof
-is about 44 KiB.
-`make CONFIG=-DMSGS=25 ntru_voting` runs the same election size as the
-end-to-end tests of the other codebases, 25 voters and 8 candidates, in about
-55 seconds, about 33 of them the ballot proofs (0.8 s to prove and 0.5 s to
-check each, on a laptop); `-DNCAND=<n>` and `-DMIXERS=<n>` set the candidates and the mix
-servers.
+c = 2hs + 2e + m with s, e ternary and short and m = X^j with j < NCAND, or 0: a
+vote for one candidate, or a blank one. It proves m binary and equal to a u with
+||u|| <= 1, which leaves only X^j or 0, and X^(2048 - NCAND) m binary, which in
+the negacyclic ring holds for j < NCAND and fails for j >= NCAND. It is bound to
+the election and the voter, so it cannot be copied to another voter's ballot.
+LaZer lifts the statement to its ring of degree 64 and an 85-bit proof modulus;
+`lazer/ntru_ballot.py` describes it, and `lazer/ntru_ballot.h` is generated from
+it, from `third_party/lazer/scripts`, with `sage lin-codegen.sage
+../../../lazer/ntru_ballot.py > ../../../lazer/ntru_ballot.h`. LaZer's default
+target, a root Hermite factor of 1.0044, is about 102 bits under the
+lattice-estimator here, so the file asks for 1.0036: MLWE 136.7 and MSIS 135.8
+bits, knowledge error 2^-127. The proof is about 51 KiB. `make CONFIG=-DMSGS=25
+ntru_voting` runs the same election size as the end-to-end tests of the other
+codebases, 25 voters and 8 candidates, in about 55 seconds, about 33 of them the
+ballot proofs (0.8 s to prove and 0.5 s to check each, on a laptop);
+`-DNCAND=<n>` and `-DMIXERS=<n>` set the candidates and the mix servers.
 
 __WARNING__: This is an academic proof of concept, and in particular has not received code review. This implementation is NOT ready for any type of production use.

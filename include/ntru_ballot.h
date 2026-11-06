@@ -33,8 +33,8 @@ void ntru_ballot_setup(void);
 size_t ntru_ballot_proof_len(void);
 
 /**
- * Prove that c = 2 h s + 2 e + m with s, e ternary and short and m = X^j or 0,
- * bound to ctx. Refuses (returns 0, no proof) if the witness is not of that
+ * Prove that c = 2 h s + 2 e + m with s, e ternary and short and m = X^j,
+ * j < ncand, or 0, bound to ctx. Refuses (returns 0, no proof) if the witness is not of that
  * form or the equation does not hold.
  *
  * @param[out] proof		- room for ntru_ballot_proof_len() bytes.
@@ -43,15 +43,16 @@ size_t ntru_ballot_proof_len(void);
  */
 int ntru_ballot_prove(uint8_t *proof, size_t *len, const int64_t c[],
 		const int64_t h[], const int64_t s[], const int64_t e[],
-		const int64_t m[], const uint8_t *ctx, size_t ctxlen);
+		const int64_t m[], int ncand, const uint8_t *ctx, size_t ctxlen);
 
 /**
- * Verify a ballot proof for c under the public key h and the context ctx.
+ * Verify a ballot proof for c under the public key h, for an election of
+ * ncand candidates, and the context ctx.
  *
  * @return 1 if it verifies, 0 otherwise.
  */
 int ntru_ballot_verify(const uint8_t *proof, size_t len, const int64_t c[],
-		const int64_t h[], const uint8_t *ctx, size_t ctxlen);
+		const int64_t h[], int ncand, const uint8_t *ctx, size_t ctxlen);
 
 #ifdef __cplusplus
 }
