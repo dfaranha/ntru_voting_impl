@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "common.h"
+#include "serial.h"
 
 /**
  * The amortized exact proof of src/ntru_pismall.cpp, specialised to the statement
@@ -59,6 +60,11 @@ size_t pismall_const_bytes(const pismall_const_t * pi);
 
 /** Release a proof and the one-time setup it shares with the other proofs. */
 void pismall_const_free(pismall_const_t * pi);
+/* The proof as published bytes (ntru_pismall.cpp): write returns 0 if the
+ * proof is not of the form a prover makes; read returns a proof to verify, or
+ * one to free if the reader is left bad or unfinished. */
+int pismall_const_write(const pismall_const_t * pi, serial::bits & b);
+pismall_const_t *pismall_const_read(serial::bits & b);
 void pismall_const_clear(void);
 
 /**
@@ -81,6 +87,11 @@ int pismall_mix_verify(pismall_mix_t * pi, comkey_t & key, params::poly_q & pk,
 		commit_t * P, size_t n);
 size_t pismall_mix_bytes(const pismall_mix_t * pi);
 void pismall_mix_free(pismall_mix_t * pi);
+/* The proof as published bytes (ntru_pismall.cpp): write returns 0 if the
+ * proof is not of the form a prover makes; read returns a proof to verify, or
+ * one to free if the reader is left bad or unfinished. */
+int pismall_mix_write(const pismall_mix_t * pi, serial::bits & b);
+pismall_mix_t *pismall_mix_read(serial::bits & b);
 void pismall_mix_clear(void);
 
 /**
@@ -98,6 +109,11 @@ int pismall_dec_verify(pismall_dec_t * pi, comkey_t & key, commit_t * Y,
 		size_t n);
 size_t pismall_dec_bytes(const pismall_dec_t * pi);
 void pismall_dec_free(pismall_dec_t * pi);
+/* The proof as published bytes (ntru_pismall.cpp): write returns 0 if the
+ * proof is not of the form a prover makes; read returns a proof to verify, or
+ * one to free if the reader is left bad or unfinished. */
+int pismall_dec_write(const pismall_dec_t * pi, serial::bits & b);
+pismall_dec_t *pismall_dec_read(serial::bits & b);
 void pismall_dec_clear(void);
 
 #endif

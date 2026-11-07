@@ -724,7 +724,7 @@ static int shuffle_verifier(params::poly_q y[MSGS][LIN_REPS][NTRU_WIDTH],
  * @note This function extends commitments, adjusts keys, and then invokes
  *       the shuffle_prover and shuffle_verifier functions.
  */
-static int run(commit_t com[MSGS], vector<params::poly_q> m,
+[[maybe_unused]] static int run(commit_t com[MSGS], vector<params::poly_q> m,
                vector<params::poly_q> _m, vector<params::poly_q> sigma,
                comkey_t &key, vector<params::poly_q> r[MSGS]) {
     // Declare local variables for the function
@@ -797,6 +797,138 @@ static int run(commit_t com[MSGS], vector<params::poly_q> m,
     }
 
     return result;
+}
+
+/*
+ * The proof of shuffle as published bytes, which is how the election runs
+ * it: shuffle_prove_bytes() writes the transcript and keeps nothing a verifier
+ * reads, and shuffle_verify_bytes() checks it from those bytes, the
+ * commitments c it is about (which the verifier builds from public data) and
+ * the output messages _msv (from the published list, NTT domain). The order is
+ * the order the verifier needs:
+ *
+ *   - the commitments P_i to the sigma_i, the proof that they are ring
+ *     constants and the proof that they are short, sent once;
+ *   - every pass's D_i, all committed before beta;
+ *   - for each pass, s_0 .. s_{MSGS-2} (s_{MSGS-1} is never used), then for
+ *     each relation its hash and its responses, coefficients Golomb-Rice coded
+ *     about SIGMA_C.
+ *
+ * The verifier derives tau, mu and beta itself and checks each relation as it
+ * reads it, with storage of its own: nothing the prover left behind reaches it.
+ */
+static int shuffle_prove_bytes(serial::bits &out, commit_t com[MSGS],
+                               vector<params::poly_q> m, vector<params::poly_q> _m,
+                               vector<params::poly_q> sigma, comkey_t &key,
+                               vector<params::poly_q> r[MSGS]) {
+    params::poly_q tau[SHUFFLE_REPS], mu[SHUFFLE_REPS], beta[SHUFFLE_REPS];
+    double t0 = shuffle_now();
+    int ok = 1;
+
+    for (size_t i = 0; i < MSGS; i++) {
+        ms[i] = m[i];
+        ms[i].ntt_pow_phi();
+        _ms[i] = _m[i];
+        _ms[i].ntt_pow_phi();
+    }
+    shuffle_commit_sigma(pcom, pr, sigma.data(), key);
+    for (size_t i = 0; i < MSGS; i++) {
+        serial::put_commit(out, pcom[i]);
+    }
+    ok &= pismall_const_write(cst, out);
+    ok &= pibnd_short_write(bnd, out);
+    for (int rep = 0; rep < SHUFFLE_REPS && ok; rep++) {
+        shuffle_chal_hash(tau[rep], mu[rep], com, pcom, _ms, rep);
+        ok &= shuffle_prover_commit(&d[rep * MSGS], &_r[rep * MSGS],
+                                    &theta[rep * MSGS], ms, _ms, tau[rep],
+                                    mu[rep], key);
+    }
+    for (size_t i = 0; i < SHUFFLE_REPS * MSGS; i++) {
+        serial::put_commit(out, d[i]);
+    }
+    shuffle_beta_hash(beta, com, pcom, d, _ms, tau, mu);
+    for (int rep = 0; rep < SHUFFLE_REPS && ok; rep++) {
+        ok &= shuffle_prover_respond(y, w, _y, lh, &d[rep * MSGS], pcom, pr,
+                                     &_r[rep * MSGS], &theta[rep * MSGS], s,
+                                     com, ms, _ms, r, beta[rep], tau[rep],
+                                     mu[rep], key);
+        for (size_t i = 0; i < MSGS - 1; i++) {
+            serial::put_uniform(out, s[i]);
+        }
+        for (size_t l = 0; l < MSGS; l++) {
+            serial::put_bytes(out, lh[l], BLAKE3_OUT_LEN);
+            for (int j = 0; j < LIN_REPS; j++) {
+                for (int k = 0; k < NTRU_WIDTH; k++) {
+                    serial::put_gauss_ntt(out, y[l][j][k], NTRU_SIGMA_C);
+                    serial::put_gauss_ntt(out, w[l][j][k], NTRU_SIGMA_C);
+                    serial::put_gauss_ntt(out, _y[l][j][k], NTRU_SIGMA_C);
+                }
+            }
+        }
+    }
+    shuffle_t_prove += shuffle_now() - t0;
+    return ok;
+}
+
+static int shuffle_verify_bytes(serial::bits &in, commit_t c[MSGS],
+                                params::poly_q _msv[MSGS], comkey_t &key) {
+    params::poly_q tau[SHUFFLE_REPS], mu[SHUFFLE_REPS], beta[SHUFFLE_REPS];
+    params::poly_q coef[3];
+    commit_t *vp = new commit_t[MSGS];
+    commit_t *vd = new commit_t[SHUFFLE_REPS * MSGS];
+    params::poly_q *vs = new params::poly_q[MSGS];
+    params::poly_q (*z)[NTRU_WIDTH] = new params::poly_q[LIN_REPS][NTRU_WIDTH];
+    params::poly_q (*wz)[NTRU_WIDTH] = new params::poly_q[LIN_REPS][NTRU_WIDTH];
+    params::poly_q (*_z)[NTRU_WIDTH] = new params::poly_q[LIN_REPS][NTRU_WIDTH];
+    uint8_t h[BLAKE3_OUT_LEN];
+    double t0 = shuffle_now();
+    pismall_const_t *vc;
+    pibnd_short_t *vb;
+    int ok;
+
+    for (size_t i = 0; i < MSGS; i++) {
+        serial::get_commit(in, vp[i], 1);
+    }
+    vc = pismall_const_read(in);
+    ok = !in.bad && pismall_const_verify(vc, key, vp, MSGS);
+    pismall_const_free(vc);
+    vb = pibnd_short_read(in);
+    ok &= !in.bad && pibnd_short_verify(vb, key, vp, MSGS);
+    pibnd_short_free(vb);
+    for (int rep = 0; rep < SHUFFLE_REPS; rep++) {
+        shuffle_chal_hash(tau[rep], mu[rep], c, vp, _msv, rep);
+    }
+    for (size_t i = 0; i < SHUFFLE_REPS * MSGS; i++) {
+        serial::get_commit(in, vd[i], 1);
+    }
+    shuffle_beta_hash(beta, c, vp, vd, _msv, tau, mu);
+    for (int rep = 0; rep < SHUFFLE_REPS && ok && !in.bad; rep++) {
+        for (size_t i = 0; i < MSGS - 1; i++) {
+            serial::get_uniform(in, vs[i]);
+        }
+        vs[MSGS - 1] = 0;
+        for (size_t l = 0; l < MSGS && ok && !in.bad; l++) {
+            serial::get_bytes(in, h, BLAKE3_OUT_LEN);
+            for (int j = 0; j < LIN_REPS; j++) {
+                for (int k = 0; k < NTRU_WIDTH; k++) {
+                    serial::get_gauss_ntt(in, z[j][k], NTRU_SIGMA_C);
+                    serial::get_gauss_ntt(in, wz[j][k], NTRU_SIGMA_C);
+                    serial::get_gauss_ntt(in, _z[j][k], NTRU_SIGMA_C);
+                }
+            }
+            shuffle_coeffs(coef, l, vs, _msv, beta[rep], tau[rep], mu[rep]);
+            ok &= !in.bad && lin_verifier(z, wz, _z, h, c[l], vp[l],
+                                          vd[rep * MSGS + l], coef, key);
+        }
+    }
+    delete[] vp;
+    delete[] vd;
+    delete[] vs;
+    delete[] z;
+    delete[] wz;
+    delete[] _z;
+    shuffle_t_verify += shuffle_now() - t0;
+    return ok && !in.bad;
 }
 
 #ifdef MAIN

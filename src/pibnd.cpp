@@ -525,6 +525,38 @@ int pibnd_short_verify(pibnd_short_t * pi, comkey_t & key, commit_t * P,
 	return pibnd_verifier(pi->h, short_scratch, A, t);
 }
 
+/* The proof as published bytes: its hash, then Z, held in the NTT domain and
+ * sent as coefficients, Golomb-Rice coded about the width of its row. Only a
+ * complete proof is published; complete is not sent. */
+int pibnd_short_write(const pibnd_short_t * pi, serial::bits & b) {
+	if (pi == NULL || !pi->complete) {
+		return 0;
+	}
+	serial::put_bytes(b, pi->h, BLAKE3_OUT_LEN);
+	for (int i = 0; i < V; i++) {
+		for (int j = 0; j < NTI; j++) {
+			serial::put_gauss_ntt(b, pi->Z[i][j],
+					i < ANEX_K ? SIGMA_ANEX : SIGMA_ANEX_HAT);
+		}
+	}
+	return 1;
+}
+
+pibnd_short_t *pibnd_short_read(serial::bits & b) {
+	pibnd_short_t *pi = new pibnd_short_t;
+
+	pi->Z = new params::poly_q[V][NTI];
+	serial::get_bytes(b, pi->h, BLAKE3_OUT_LEN);
+	for (int i = 0; i < V; i++) {
+		for (int j = 0; j < NTI; j++) {
+			serial::get_gauss_ntt(b, pi->Z[i][j],
+					i < ANEX_K ? SIGMA_ANEX : SIGMA_ANEX_HAT);
+		}
+	}
+	pi->complete = 1;
+	return pi;
+}
+
 size_t pibnd_short_bytes(const pibnd_short_t * pi) {
 	serial::bits b;
 	params::poly_q t;

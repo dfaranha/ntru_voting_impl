@@ -52,6 +52,15 @@ class bits {
 	std::vector < uint8_t > buf;
 	size_t nbits = 0;             /* written */
 	size_t pos = 0;               /* read cursor */
+	/* Set by a read past the end, or of an encoding no writer produces; a
+	 * transcript read with it set is to be rejected. */
+	bool bad = false;
+
+	bits() = default;
+	/** A reader over len published bytes. */
+	bits(const uint8_t *in, size_t len) : buf(in, in + len), nbits(8 * len) {}
+	/** A reader over a writer's bytes, which it takes over. */
+	explicit bits(std::vector < uint8_t > &&in) : buf(std::move(in)), nbits(8 * buf.size()) {}
 
 	/* The low n bits of v, most significant first; for n > 64, the bits
 	 * above v's 64 are zeros, written without shifting a 64-bit value by 64
@@ -70,12 +79,24 @@ class bits {
 
 	uint64_t get(int n) {
 		uint64_t v = 0;
+		if (pos + n > 8 * buf.size()) {
+			bad = true;
+			pos = 8 * buf.size();
+			return 0;
+		}
 		for (int i = 0; i < n; i++) {
 			v <<= 1;
 			v |= (buf[pos >> 3] >> (7 - (pos & 7))) & 1;
 			pos++;
 		}
 		return v;
+	}
+
+	/** Whether a reader ended exactly where its writer did: nothing flagged,
+	 * no byte left over and the padding bits of the last byte zero. */
+	bool finish(void) const {
+		return !bad && (pos + 7) / 8 == buf.size()
+				&& ((pos & 7) == 0 || (buf[pos >> 3] & (0xff >> (pos & 7))) == 0);
 	}
 
 	/** Bytes the transcript occupies, which is what a size is. */
@@ -131,7 +152,12 @@ static inline int64_t get_rice(bits & b, int k) {
 		q++;
 	}
 	if (q >= 24) {
-		return unzigzag(b.get(64));
+		uint64_t u = b.get(64);
+		/* The writer escapes only what the unary run cannot carry. */
+		if ((u >> k) < 24) {
+			b.bad = true;
+		}
+		return unzigzag(u);
 	}
 	uint64_t u = q << k;
 	if (k > 0) {
@@ -156,8 +182,15 @@ static inline void put_uniform(bits & b, const params::poly_q & p) {
 }
 
 static inline void get_uniform(bits & b, params::poly_q & p) {
+	const uint64_t q = params::poly_q::get_modulus(0);
+
 	for (size_t i = 0; i < params::poly_q::degree; i++) {
-		p(0, i) = b.get(qbits());
+		uint64_t v = b.get(qbits());
+		if (v >= q) {
+			b.bad = true;
+			v = 0;
+		}
+		p(0, i) = v;
 	}
 }
 
@@ -177,7 +210,81 @@ static inline void get_gauss(bits & b, params::poly_q & p, double sigma) {
 
 	for (size_t i = 0; i < params::poly_q::degree; i++) {
 		int64_t c = get_rice(b, k);
+		if (c > (int64_t) (q / 2) || c < -(int64_t) (q / 2)) {
+			b.bad = true;
+			c = 0;
+		}
 		p(0, i) = c < 0 ? (uint64_t) ((int64_t) q + c) : (uint64_t) c;
+	}
+}
+
+/** A Gaussian element held in the NTT domain, sent in the coefficient one. */
+static inline void put_gauss_ntt(bits & b, const params::poly_q & p, double sigma) {
+	params::poly_q t = p;
+	t.invntt_pow_invphi();
+	put_gauss(b, t, sigma);
+}
+
+static inline void get_gauss_ntt(bits & b, params::poly_q & p, double sigma) {
+	get_gauss(b, p, sigma);
+	p.ntt_pow_phi();
+}
+
+/** A ternary element held in the NTT domain: 2 bits a coefficient, 0, 1 or
+ * 2 for -1. Returns 0, writing nothing usable, if it is not ternary. */
+static inline int put_ternary_ntt(bits & b, const params::poly_q & p) {
+	const uint64_t q = params::poly_q::get_modulus(0);
+	params::poly_q t = p;
+	int ok = 1;
+
+	t.invntt_pow_invphi();
+	for (size_t i = 0; i < params::poly_q::degree; i++) {
+		uint64_t c = t(0, i);
+		ok &= c <= 1 || c == q - 1;
+		b.put(c <= 1 ? c : 2, 2);
+	}
+	return ok;
+}
+
+static inline void get_ternary_ntt(bits & b, params::poly_q & p) {
+	const uint64_t q = params::poly_q::get_modulus(0);
+
+	for (size_t i = 0; i < params::poly_q::degree; i++) {
+		uint64_t c = b.get(2);
+		if (c == 3) {
+			b.bad = true;
+			c = 0;
+		}
+		p(0, i) = c == 2 ? q - 1 : c;
+	}
+	p.ntt_pow_phi();
+}
+
+static inline void put_bytes(bits & b, const uint8_t *v, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		b.put(v[i], 8);
+	}
+}
+
+static inline void get_bytes(bits & b, uint8_t *v, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		v[i] = (uint8_t) b.get(8);
+	}
+}
+
+/** A commitment: c1 and its n message rows, uniform, as held. */
+static inline void put_commit(bits & b, const commit_t & c) {
+	put_uniform(b, c.c1);
+	for (size_t i = 0; i < c.c2.size(); i++) {
+		put_uniform(b, c.c2[i]);
+	}
+}
+
+static inline void get_commit(bits & b, commit_t & c, size_t n) {
+	get_uniform(b, c.c1);
+	c.c2.resize(n);
+	for (size_t i = 0; i < n; i++) {
+		get_uniform(b, c.c2[i]);
 	}
 }
 
