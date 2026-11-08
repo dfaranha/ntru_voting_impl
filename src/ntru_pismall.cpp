@@ -1432,7 +1432,8 @@ static void poly_to(params::poly_q & out, fmpz_mod_poly_t & in,
 	out.ntt_pow_phi();
 }
 
-static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
+/* out = in, in being in the coefficient domain. */
+static void poly_from_coef(fmpz_mod_poly_t & out, const params::poly_q & in,
 		const fmpz_mod_ctx_t ctx) {
 	/* in is stored as RNS residues, so recombine them directly rather than
 	 * going through poly2mpz and an mpz per coefficient. No centring: out's
@@ -1450,8 +1451,7 @@ static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
 		}
 		ready = 1;
 	}
-	in.invntt_pow_invphi();
-	const uint64_t *d = in.data();
+	const uint64_t *d = const_cast < params::poly_q & >(in).data();
 
 	/* Write the coefficient array directly: the recombined values are already
 	 * reduced, so fmpz_mod_poly_set_coeff_fmpz's bounds check, length update
@@ -1474,6 +1474,13 @@ static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
 	}
 	_fmpz_mod_poly_set_length(out, N);
 	_fmpz_mod_poly_normalise(out);
+}
+
+/* out = in, in being in the NTT domain, as it is left. */
+static void poly_from(fmpz_mod_poly_t & out, params::poly_q & in,
+		const fmpz_mod_ctx_t ctx) {
+	in.invntt_pow_invphi();
+	poly_from_coef(out, in, ctx);
 	in.ntt_pow_phi();
 }
 
@@ -1554,7 +1561,7 @@ static aex_code_t (*aex_encode_rows(size_t i0, size_t n,
 					fmpz_mod_poly_set_coeff_ui(poly, l, v[j][i][k][l], ctx);
 				}
 				if (j == 0) {
-					poly_from(zero, s[i][k], ctx);
+					poly_from_coef(zero, s[i][k], ctx);
 				} else {
 					fmpz_mod_poly_zero(zero, ctx);
 				}
@@ -1779,14 +1786,12 @@ static int pismall_prover_run(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX
 			}
 			s0[k].ntt_pow_phi();
 			for (size_t i = 0; i < TAU; i++) {
-				s[i][k].invntt_pow_invphi();
 				const uint64_t *d = s[i][k].data();
 				for (size_t j = 0; j < NM; j++) {
 					for (size_t l = 0; l < N; l++) {
 						sres[(j * N + l) * TAU + i] = d[j * N + l];
 					}
 				}
-				s[i][k].ntt_pow_phi();
 			}
 			for (size_t l = 0; l < N; l++) {
 				for (size_t j = 0; j < NM; j++) {
@@ -1854,7 +1859,7 @@ static int pismall_prover_run(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX
 	/* Compute remaining f = f(x) = \Sum s_i * l_i(x). */
 	for (size_t i = 1; i <= TAU; i++) {
 		for (int j = 0; j < V; j++) {
-			poly_from(poly, s[i - 1][j], ctx_q);
+			poly_from_coef(poly, s[i - 1][j], ctx_q);
 			for (int c = 0; c < AEX_DEG; c++) {
 				scalar_mul(poly2, poly,
 						prover_y[i].c[c], ctx_q);
@@ -1896,7 +1901,7 @@ static int pismall_prover_run(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX
 					/* i runs from 1 to TAU, so this has to be s[i - 1] like
 					 * every other access in this loop; s[i] read one row past
 					 * the end of the matrix on the last iteration. */
-					poly_from(poly, s[i - 1][k], ctx_q);
+					poly_from_coef(poly, s[i - 1][k], ctx_q);
 					for (int c = 0; c < AEX_DEG; c++) {
 						scalar_mul(poly2, poly,
 								b.c[c], ctx_q);
@@ -1964,7 +1969,21 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	if (own) {
 		pismall_prover_alloc(false);
 	}
+	/* The prover reads the witness only as coefficients: in extraction, in
+	 * both encodings of the rows and in f and h. So it is put in the
+	 * coefficient domain once here, and back once after, rather than each
+	 * element being transformed back and forth five times. */
+	for (size_t i = 0; i < TAU; i++) {
+		for (size_t k = 0; k < V; k++) {
+			s[i][k].invntt_pow_invphi();
+		}
+	}
 	ok = pismall_prover_run(com, x, f, rf, h, rh, rd, key, lag, prng, ctx, o);
+	for (size_t i = 0; i < TAU; i++) {
+		for (size_t k = 0; k < V; k++) {
+			s[i][k].ntt_pow_phi();
+		}
+	}
 	if (own) {
 		pismall_prover_free();
 	}
