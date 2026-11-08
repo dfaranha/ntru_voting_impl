@@ -406,6 +406,18 @@ static aex_code_t (*H)[3][V];
 static void pismall_alloc(void) {
 	s = new params::poly_q[TAU][V];
 	t = new params::poly_q[TAU][R];
+}
+
+static void pismall_free(void) {
+	delete[]s;
+	delete[]t;
+}
+
+/* The prover's working space: H and v are most of a proof's memory (about 8
+ * GB at TAU = 1024 for the proof of decryption's relation), and this file is
+ * linked three times, so pismall_prover holds them only while it makes a
+ * proof, unless its caller allocated them first and keeps them. */
+static void pismall_prover_alloc(void) {
 	H = new aex_code_t[TAU][3][V];
 	v = new uint64_t[3][TAU][V][params::poly_q::degree];
 	prover_y = new gr_t[TAU + 1];
@@ -414,15 +426,15 @@ static void pismall_alloc(void) {
 	prover_r = new fmpz_t[TAU][3][ETA];
 }
 
-static void pismall_free(void) {
-	delete[]s;
-	delete[]t;
+static void pismall_prover_free(void) {
 	delete[]H;
 	delete[]v;
 	delete[]prover_y;
 	delete[]prover_beta;
 	delete[]prover_wt;
 	delete[]prover_r;
+	H = NULL;
+	v = NULL;
 }
 
 /* --- Reed-Solomon encoding over Z_q ------------------------------------- */
@@ -1513,7 +1525,7 @@ static void pismall_setup(fmpz_mod_poly_t lag[], fmpz_t a[TAU], fmpz_t & q,
 	}
 }
 
-static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG],
+static int pismall_prover_run(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG],
 		gr_t rf[ETA], fmpz_mod_poly_t h[2][V][AEX_DEG], gr_t rh[ETA],
 		vector < params::poly_q > rd, comkey_t & key,
 		fmpz_mod_poly_t lag[TAU + 1], flint_rand_t prng,
@@ -1828,6 +1840,23 @@ static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG
 	}
 	fmpz_mod_ctx_clear(ctx_q);
 	return 1;
+}
+
+static int pismall_prover(commit_t & com, gr_t & x, fmpz_mod_poly_t f[V][AEX_DEG],
+		gr_t rf[ETA], fmpz_mod_poly_t h[2][V][AEX_DEG], gr_t rh[ETA],
+		vector < params::poly_q > rd, comkey_t & key,
+		fmpz_mod_poly_t lag[TAU + 1], flint_rand_t prng,
+		const fmpz_mod_ctx_t ctx, aex_open_t & o) {
+	int ok, own = H == NULL;
+
+	if (own) {
+		pismall_prover_alloc();
+	}
+	ok = pismall_prover_run(com, x, f, rf, h, rh, rd, key, lag, prng, ctx, o);
+	if (own) {
+		pismall_prover_free();
+	}
+	return ok;
 }
 
 static int pismall_verifier(commit_t & com, fmpz_mod_poly_t f[V][AEX_DEG],
@@ -3219,10 +3248,14 @@ int main() {
 
 	aex_rand_init(rand);
 	pismall_alloc();
+	/* The tests look at the prover's rows after a proof, so they keep its
+	 * working space for the whole run. */
+	pismall_prover_alloc();
 
 	printf("\n** Tests for lattice-based AEX proof:\n\n");
 	test(rand);
 
+	pismall_prover_free();
 	pismall_free();
 	flint_rand_clear(rand);
 
