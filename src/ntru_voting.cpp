@@ -810,25 +810,30 @@ static void test() {
 		int junk = 1;
 
 		mix_publish(pub, sz, list[0], m, _m, sigma, pk, key, junk);
-		std::vector < uint8_t > honest = pub.buf;
+		/* One copy of the publication, at 1000 votes a gigabyte: each test
+		 * alters it in place, lends it to the reader and undoes the change. */
+		std::vector < uint8_t > honest = std::move(pub.buf);
 
 		TEST_ONCE("a mix server's publication reads back and verifies") {
-			serial::bits rd{std::vector < uint8_t > (honest)};
-			TEST_ASSERT(mix_check(rd, next, list[0], pk, key, junk) == 1, end);
+			serial::bits rd(std::move(honest));
+			int ok = mix_check(rd, next, list[0], pk, key, junk);
+			honest = std::move(rd.buf);
+			TEST_ASSERT(ok == 1, end);
 		} TEST_END;
 
 		TEST_ONCE("a mix server that changes an output is rejected") {
 			/* The low bit of the first coefficient of output 0. */
-			std::vector < uint8_t > bad = honest;
-			bad[serial::qbits() / 8] ^= (uint8_t) (0x80 >> ((serial::qbits() - 1) % 8));
-			serial::bits rd(std::move(bad));
-			TEST_ASSERT(mix_check(rd, next, list[0], pk, key, junk) == 0, end);
+			honest[serial::qbits() / 8] ^= (uint8_t) (0x80 >> ((serial::qbits() - 1) % 8));
+			serial::bits rd(std::move(honest));
+			int ok = mix_check(rd, next, list[0], pk, key, junk);
+			honest = std::move(rd.buf);
+			honest[serial::qbits() / 8] ^= (uint8_t) (0x80 >> ((serial::qbits() - 1) % 8));
+			TEST_ASSERT(ok == 0, end);
 		} TEST_END;
 
 		TEST_ONCE("a mix server that replaces a ballot is rejected") {
 			/* In place of output 0, a fresh encryption of a vote of the
 			 * server's choosing. */
-			std::vector < uint8_t > bad = honest;
 			params::poly_q own;
 			params::poly_p v;
 			serial::bits ob;
@@ -836,16 +841,22 @@ static void test() {
 			make_vote(v, NCAND - 1);
 			ntru_encrypt(own, pk, v);
 			serial::put_uniform(ob, own);
-			memcpy(bad.data(), ob.buf.data(), elem);
-			serial::bits rd(std::move(bad));
-			TEST_ASSERT(mix_check(rd, next, list[0], pk, key, junk) == 0, end);
+			std::vector < uint8_t > out0(honest.begin(), honest.begin() + elem);
+			memcpy(honest.data(), ob.buf.data(), elem);
+			serial::bits rd(std::move(honest));
+			int ok = mix_check(rd, next, list[0], pk, key, junk);
+			honest = std::move(rd.buf);
+			memcpy(honest.data(), out0.data(), elem);
+			TEST_ASSERT(ok == 0, end);
 		} TEST_END;
 
 		TEST_ONCE("a mix server's publication with a byte appended is refused") {
-			std::vector < uint8_t > bad = honest;
-			bad.push_back(0);
-			serial::bits rd(std::move(bad));
-			TEST_ASSERT(mix_check(rd, next, list[0], pk, key, junk) == 0, end);
+			honest.push_back(0);
+			serial::bits rd(std::move(honest));
+			int ok = mix_check(rd, next, list[0], pk, key, junk);
+			honest = std::move(rd.buf);
+			honest.pop_back();
+			TEST_ASSERT(ok == 0, end);
 		} TEST_END;
 		t_remix = keep[0];
 		t_rr_prove = keep[1];
