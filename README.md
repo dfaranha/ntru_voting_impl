@@ -72,21 +72,28 @@ does not cover the noise as sampled. `ntru_pismall.cpp` is built three times
 into `ntru_voting`, once per relation, as the `Makefile` explains.
 
 The ballot proof (`src/ntru_ballot.c`) shows, with LaZer's linear proofs, that
-c = 2hs + 2e + m with s, e ternary and short and m = X^j with j < NCAND, or 0: a
-vote for one candidate, or a blank one. It proves m binary and equal to a u with
-||u|| <= 1, which leaves only X^j or 0, and X^(2048 - NCAND) m binary, which in
-the negacyclic ring holds for j < NCAND and fails for j >= NCAND. It is bound to
-the election and the voter, so it cannot be copied to another voter's ballot.
-LaZer lifts the statement to its ring of degree 64 and an 85-bit proof modulus;
-`lazer/ntru_ballot.py` describes it, and `lazer/ntru_ballot.h` is generated from
-it, from `third_party/lazer/scripts`, with `sage lin-codegen.sage
-../../../lazer/ntru_ballot.py > ../../../lazer/ntru_ballot.h`. LaZer's default
-target, a root Hermite factor of 1.0044, is about 102 bits under the
-lattice-estimator here, so the file asks for 1.0036: MLWE 136.7 and MSIS 135.8
-bits, knowledge error 2^-127. The proof is about 51 KiB. `make CONFIG=-DMSGS=25
+c = 2hs + 2e + m with s, e ternary and short and m a vote for one of NCAND
+candidates, or 0 for a blank one. A vote for candidate j is X^(32j): the proof
+is stated over LaZer's own ring of degree 64, R_64 = Z_q[Y]/(Y^64 + 1), with
+R_q = R_64[X]/(X^32 - Y), and X^(32j) = Y^j is one element of it rather than
+32. The encryption equation becomes 32 equations over R_64, one per piece of
+c; the proof shows m binary and equal to a u with ||u|| <= 1, which leaves only
+Y^j or 0, and Y^(64 - NCAND) m binary, which in the negacyclic ring holds for
+j < NCAND and fails for j >= NCAND, so NCAND is at most 64 (63 with the tests,
+which also try NCAND + 1). Stating it over R_q and letting LaZer lift it made
+m and the last row's witness 32 binary elements of R_64 each; this way the
+witness is 67 elements, not 160, and the proof about 35 KiB, not 51. It is
+bound to the election and the voter, so it cannot be copied to another voter's
+ballot. `lazer/ntru_ballot.py` describes it, and `lazer/ntru_ballot.h` is
+generated from it, from `third_party/lazer/scripts`, with `sage
+lin-codegen.sage ../../../lazer/ntru_ballot.py > ../../../lazer/ntru_ballot.h`,
+for an 83-bit proof modulus. LaZer's default target, a root Hermite factor of
+1.0044, is about 102 bits under the lattice-estimator, so the file asks for
+1.0036: MLWE 135.2 and MSIS 140.2 bits core-SVP (`LWE.estimate.rough`,
+`SIS.lattice` with `RC.ADPS16`), knowledge error 2^-127. `make CONFIG=-DMSGS=25
 ntru_voting` runs the same election size as the end-to-end tests of the other
-codebases, 25 voters and 8 candidates, in about 55 seconds, about 33 of them the
-ballot proofs (0.8 s to prove and 0.5 s to check each, on a laptop);
+codebases, 25 voters and 8 candidates; a ballot takes 0.78 s to prove and
+0.47 s to check on a laptop, against 2.76 s and 1.87 s for the lifted statement;
 `-DNCAND=<n>` and `-DMIXERS=<n>` set the candidates and the mix servers.
 
 __WARNING__: This is an academic proof of concept, and in particular has not received code review. This implementation is NOT ready for any type of production use.

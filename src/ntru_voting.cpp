@@ -64,10 +64,15 @@ void ntru_comb(params::poly_p & m, params::poly_q c, params::poly_q dsj[],
 #if MIXERS < 1 || MIXERS > 4
 #error "ntru_voting_impl: the decryption bounds allow 1 to 4 mix servers (MIXERS)"
 #endif
-/* Candidates: a vote for candidate j is X^j. */
+/* Candidates: a vote for candidate j is X^(NTRU_BALLOT_STRIDE j), Y^j in the
+ * ring of degree 64 the ballot proof is stated over (src/ntru_ballot.c). */
 #ifndef NCAND
 #define NCAND 		8
 #endif
+#if NCAND < 1 || NCAND >= NTRU_BALLOT_MAXCAND
+#error "ntru_voting_impl: the ballot proof allows 1 to 63 candidates (NCAND); the tests use NCAND + 1"
+#endif
+#define STRIDE 		NTRU_BALLOT_STRIDE
 
 /* A uniform integer in [0, n), from the operating system. */
 static uint32_t uniform_below(uint32_t n) {
@@ -115,12 +120,13 @@ static void ballot_ctx(uint8_t ctx[CTX_BYTES], const uint8_t eid[16], int voter)
 	}
 }
 
-/* The plaintext X^0 + X^1, in the coefficient domain: binary, but two votes. */
+/* The plaintext X^0 + X^STRIDE, in the coefficient domain: binary, but votes
+ * for candidates 0 and 1. */
 static void make_two_votes(params::poly_p & m) {
 	std::array < mpz_t, NTRU_DEGREE > c;
 
 	for (size_t i = 0; i < NTRU_DEGREE; i++) {
-		mpz_init_set_ui(c[i], i < 2);
+		mpz_init_set_ui(c[i], i == 0 || i == STRIDE);
 	}
 	m.mpz2poly(c);
 	for (size_t i = 0; i < NTRU_DEGREE; i++) {
@@ -128,12 +134,12 @@ static void make_two_votes(params::poly_p & m) {
 	}
 }
 
-/* The vote X^j, in the coefficient domain as ntru_encrypt takes it. */
+/* The vote X^(STRIDE j), in the coefficient domain as ntru_encrypt takes it. */
 static void make_vote(params::poly_p & m, int j) {
 	std::array < mpz_t, NTRU_DEGREE > c;
 
 	for (size_t i = 0; i < NTRU_DEGREE; i++) {
-		mpz_init_set_ui(c[i], (int) i == j);
+		mpz_init_set_ui(c[i], (int) i == STRIDE * j);
 	}
 	m.mpz2poly(c);
 	for (size_t i = 0; i < NTRU_DEGREE; i++) {
@@ -141,7 +147,8 @@ static void make_vote(params::poly_p & m, int j) {
 	}
 }
 
-/* The candidate a plaintext votes for, or -1 if it is not X^j, j < NCAND. */
+/* The candidate a plaintext votes for, or -1 if it is not X^(STRIDE j),
+ * j < NCAND. */
 static int candidate(params::poly_p & m) {
 	std::array < mpz_t, NTRU_DEGREE > c;
 	int j = -1, ok = 1;
@@ -151,8 +158,9 @@ static int candidate(params::poly_p & m) {
 	}
 	m.poly2mpz(c);
 	for (size_t i = 0; i < NTRU_DEGREE && ok; i++) {
-		if (mpz_cmp_ui(c[i], 1) == 0 && (int) i < NCAND && j < 0) {
-			j = i;
+		if (mpz_cmp_ui(c[i], 1) == 0 && i % STRIDE == 0
+				&& (int) (i / STRIDE) < NCAND && j < 0) {
+			j = i / STRIDE;
 		} else if (mpz_sgn(c[i]) != 0) {
 			ok = 0;
 		}
@@ -576,7 +584,7 @@ static void test() {
 		to_i64(s64, rs, false);
 		to_i64(e64, re, false);
 		memset(m64, 0, sizeof(m64));
-		m64[votes[i]] = 1;
+		m64[STRIDE * votes[i]] = 1;
 		ballot_ctx(ctx, eid, i);
 		proof[i].resize(ntru_ballot_proof_len());
 		cast_ok &= ntru_ballot_prove(proof[i].data(), &len, c64, h64, s64, e64,
@@ -645,14 +653,14 @@ static void test() {
 		to_i64(s64, rs, false);
 		to_i64(e64, re, false);
 		memset(m64, 0, sizeof(m64));
-		m64[0] = m64[1] = 1;
+		m64[0] = m64[STRIDE] = 1;
 		ballot_ctx(ctx, eid, 0);
 		TEST_ASSERT(ntru_ballot_prove(pf.data(), &len, c64, h64, s64, e64, m64,
 				NCAND, ctx, sizeof(ctx)) == 0, end);
 	} TEST_END;
 
 	TEST_ONCE("a ballot for a candidate past the last is rejected") {
-		/* X^NCAND, a vote for no candidate of this election, proven as a
+		/* Candidate NCAND, a vote for no candidate of this election, proven as a
 		 * ballot of an election with one candidate more: the proof is a valid
 		 * one, of that other statement, and the board must refuse it. */
 		std::vector < uint8_t > pf(ntru_ballot_proof_len());
@@ -664,7 +672,7 @@ static void test() {
 		to_i64(s64, rs, false);
 		to_i64(e64, re, false);
 		memset(m64, 0, sizeof(m64));
-		m64[NCAND] = 1;
+		m64[STRIDE * NCAND] = 1;
 		ballot_ctx(ctx, eid, 0);
 		TEST_ASSERT(ntru_ballot_prove(pf.data(), &len, c64, h64, s64, e64, m64,
 				NCAND, ctx, sizeof(ctx)) == 0, end);
