@@ -378,21 +378,29 @@ static int simul_inverse(params::poly_q inv[MSGS], params::poly_q m[MSGS]) {
  * challenge. So the dot products and norms of all of them are accumulated
  * here and the decision is taken once, over the batch: testing each vector on
  * its own would multiply the rejection rate by the number of vectors. */
+/* zc holds the mask y in the coefficient domain on entry and the response
+ * z = y + v there on return, the form it is published in: v is transformed
+ * back once, which the test needs anyway, and z, held in the NTT domain by the
+ * caller, is not transformed at all. */
 static void rej_accum(long double &dot, long double &norm,
-                      params::poly_q z[NTRU_WIDTH], params::poly_q v[NTRU_WIDTH]) {
+                      params::poly_q zc[NTRU_WIDTH], params::poly_q v[NTRU_WIDTH]) {
     int64_t a[params::poly_q::degree], b[params::poly_q::degree];
     params::poly_q t;
 
     for (int i = 0; i < NTRU_WIDTH; i++) {
-        t = z[i];
-        t.invntt_pow_invphi();
-        util::centred(a, t);
         t = v[i];
         t.invntt_pow_invphi();
+        zc[i] = zc[i] + t;
+        util::centred(a, zc[i]);
         util::centred(b, t);
         util::dot_norm(dot, norm, a, b, params::poly_q::degree);
     }
 }
+
+/* Set while a proof of shuffle is made to be published: lin_prover then
+ * leaves its responses in the coefficient domain, the one they are published
+ * in, rather than in the NTT domain. */
+static int lin_coef_out;
 
 /* Accept with probability min(1, exp((-2<z, v> + ||v||^2) / 2 s2) / M). */
 static int rej_decide(long double dot, long double norm, uint64_t s2) {
@@ -434,6 +442,8 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
     params::poly_q t[LIN_REPS], tp[LIN_REPS], _t[LIN_REPS], u[LIN_REPS];
     params::poly_q tmp[NTRU_WIDTH], ptmp[NTRU_WIDTH], _tmp[NTRU_WIDTH];
     int64_t coeffs[params::poly_q::degree];
+    /* The responses in the coefficient domain, as rej_accum leaves them. */
+    static params::poly_q zc[3][LIN_REPS][NTRU_WIDTH];
     long double dot, norm;
     int rej;
 
@@ -444,17 +454,20 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
                     coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                util::set_signed(y[j][i], coeffs);
+                util::set_signed(zc[0][j][i], coeffs);
+                y[j][i] = zc[0][j][i];
                 y[j][i].ntt_pow_phi();
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
                     coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                util::set_signed(w[j][i], coeffs);
+                util::set_signed(zc[1][j][i], coeffs);
+                w[j][i] = zc[1][j][i];
                 w[j][i].ntt_pow_phi();
                 for (size_t k = 0; k < params::poly_q::degree; k++) {
                     coeffs[k] = sample_z(0.0, NTRU_SIGMA_C);
                 }
-                util::set_signed(_y[j][i], coeffs);
+                util::set_signed(zc[2][j][i], coeffs);
+                _y[j][i] = zc[2][j][i];
                 _y[j][i].ntt_pow_phi();
             }
 
@@ -493,19 +506,27 @@ static void lin_prover(params::poly_q y[LIN_REPS][NTRU_WIDTH],
                 w[j][i] = w[j][i] + ptmp[i];
                 _y[j][i] = _y[j][i] + _tmp[i];
             }
-            rej_accum(dot, norm, y[j], tmp);
-            rej_accum(dot, norm, w[j], ptmp);
-            rej_accum(dot, norm, _y[j], _tmp);
+            rej_accum(dot, norm, zc[0][j], tmp);
+            rej_accum(dot, norm, zc[1][j], ptmp);
+            rej_accum(dot, norm, zc[2][j], _tmp);
         }
         rej = rej_decide(dot, norm, NTRU_SIGMA_C * NTRU_SIGMA_C);
     } while (rej);
+    for (int j = 0; j < LIN_REPS && lin_coef_out; j++) {
+        for (int i = 0; i < NTRU_WIDTH; i++) {
+            y[j][i] = zc[0][j][i];
+            w[j][i] = zc[1][j][i];
+            _y[j][i] = zc[2][j][i];
+        }
+    }
 }
 
 static int lin_verifier(params::poly_q z[LIN_REPS][NTRU_WIDTH],
                         params::poly_q wz[LIN_REPS][NTRU_WIDTH],
                         params::poly_q _z[LIN_REPS][NTRU_WIDTH],
                         const uint8_t h[BLAKE3_OUT_LEN], commit_t x, commit_t p,
-                        commit_t _x, params::poly_q coef[3], comkey_t &key) {
+                        commit_t _x, params::poly_q coef[3], comkey_t &key,
+                        int checked = 0) {
     params::poly_q beta[LIN_REPS], v, pv, _v, acc;
     params::poly_q t[LIN_REPS], tp[LIN_REPS], _t[LIN_REPS], u[LIN_REPS];
     uint8_t h2[BLAKE3_OUT_LEN];
@@ -518,8 +539,9 @@ static int lin_verifier(params::poly_q z[LIN_REPS][NTRU_WIDTH],
     lin_chal(beta, h);
 
     for (int j = 0; j < LIN_REPS; j++) {
-        /* Verifier checks norm, reconstruct from NTT representation. */
-        for (int i = 0; i < NTRU_WIDTH; i++) {
+        /* Verifier checks norm, reconstruct from NTT representation, unless the
+         * caller has (checked), in the coefficient domain it read them in. */
+        for (int i = 0; i < NTRU_WIDTH && !checked; i++) {
             v = z[j][i];
             v.invntt_pow_invphi();
             result &= bdlop_test_norm(v, NTRU_SIGMA_C * NTRU_SIGMA_C);
@@ -848,10 +870,12 @@ static int shuffle_prove_bytes(serial::bits &out, commit_t com[MSGS],
     }
     shuffle_beta_hash(beta, com, pcom, d, _ms, tau, mu);
     for (int rep = 0; rep < SHUFFLE_REPS && ok; rep++) {
+        lin_coef_out = 1;
         ok &= shuffle_prover_respond(y, w, _y, lh, &d[rep * MSGS], pcom, pr,
                                      &_r[rep * MSGS], &theta[rep * MSGS], s,
                                      com, ms, _ms, r, beta[rep], tau[rep],
                                      mu[rep], key);
+        lin_coef_out = 0;
         for (size_t i = 0; i < MSGS - 1; i++) {
             serial::put_uniform(out, s[i]);
         }
@@ -859,9 +883,9 @@ static int shuffle_prove_bytes(serial::bits &out, commit_t com[MSGS],
             serial::put_bytes(out, lh[l], BLAKE3_OUT_LEN);
             for (int j = 0; j < LIN_REPS; j++) {
                 for (int k = 0; k < NTRU_WIDTH; k++) {
-                    serial::put_gauss_ntt(out, y[l][j][k], NTRU_SIGMA_C);
-                    serial::put_gauss_ntt(out, w[l][j][k], NTRU_SIGMA_C);
-                    serial::put_gauss_ntt(out, _y[l][j][k], NTRU_SIGMA_C);
+                    serial::put_gauss(out, y[l][j][k], NTRU_SIGMA_C);
+                    serial::put_gauss(out, w[l][j][k], NTRU_SIGMA_C);
+                    serial::put_gauss(out, _y[l][j][k], NTRU_SIGMA_C);
                 }
             }
         }
@@ -911,14 +935,22 @@ static int shuffle_verify_bytes(serial::bits &in, commit_t c[MSGS],
             serial::get_bytes(in, h, BLAKE3_OUT_LEN);
             for (int j = 0; j < LIN_REPS; j++) {
                 for (int k = 0; k < NTRU_WIDTH; k++) {
-                    serial::get_gauss_ntt(in, z[j][k], NTRU_SIGMA_C);
-                    serial::get_gauss_ntt(in, wz[j][k], NTRU_SIGMA_C);
-                    serial::get_gauss_ntt(in, _z[j][k], NTRU_SIGMA_C);
+                    serial::get_gauss(in, z[j][k], NTRU_SIGMA_C);
+                    serial::get_gauss(in, wz[j][k], NTRU_SIGMA_C);
+                    serial::get_gauss(in, _z[j][k], NTRU_SIGMA_C);
+                    /* The norms where the responses were read, so that each
+                     * is transformed once, to the NTT domain. */
+                    ok &= bdlop_test_norm(z[j][k], NTRU_SIGMA_C * NTRU_SIGMA_C)
+                          && bdlop_test_norm(wz[j][k], NTRU_SIGMA_C * NTRU_SIGMA_C)
+                          && bdlop_test_norm(_z[j][k], NTRU_SIGMA_C * NTRU_SIGMA_C);
+                    z[j][k].ntt_pow_phi();
+                    wz[j][k].ntt_pow_phi();
+                    _z[j][k].ntt_pow_phi();
                 }
             }
             shuffle_coeffs(coef, l, vs, _msv, beta[rep], tau[rep], mu[rep]);
             ok &= !in.bad && lin_verifier(z, wz, _z, h, c[l], vp[l],
-                                          vd[rep * MSGS + l], coef, key);
+                                          vd[rep * MSGS + l], coef, key, 1);
         }
     }
     delete[] vp;
